@@ -462,3 +462,110 @@ fn boat_crosses_to_another_island() {
         .count();
     assert!(east > 1, "le joueur 1 doit avoir pris pied sur l'autre île");
 }
+
+// --- Rythme des attaques ---------------------------------------------------
+
+/// Durée (s) et cases prises par une expédition de `n` soldats sur des terres
+/// libres d'une grande prairie.
+fn neutral_expedition(n: i64) -> (f64, u32) {
+    let mut game = start(test_map(400, 200, None), &[(200, 100)]);
+    game.player_mut(1).soldiers = [n * 1000, 0, 0];
+    game.player_mut(1).plan.soldiers_permille = 1000;
+    game.player_mut(1).resources = Cost::default();
+    let tiles = game.player(1).unwrap().tiles;
+    game.tick(&[(1, Intent::Attack { target: NEUTRAL, ratio_permille: 1000 })]);
+    let mut ticks = 0;
+    while !game.attacks().is_empty() && ticks < 20_000 {
+        game.tick(&[]);
+        ticks += 1;
+    }
+    (ticks as f64 / 10.0, game.player(1).unwrap().tiles - tiles)
+}
+
+/// Colonnes gagnées par seconde quand `attack` soldats attaquent un voisin
+/// qui en a `defense` (front de 198 cases).
+fn front_speed(attack: i64, defense: i64) -> f64 {
+    let mut game = start(test_map(400, 200, None), &[(100, 100), (300, 100)]);
+    split_map(&mut game);
+    game.player_mut(1).soldiers = [attack * 1000, 0, 0];
+    game.player_mut(2).soldiers = [defense * 1000, 0, 0];
+    for id in [1, 2] {
+        game.player_mut(id).plan.soldiers_permille = 1000;
+        game.player_mut(id).resources = Cost::default();
+    }
+    let tiles = game.player(1).unwrap().tiles;
+    game.tick(&[(1, Intent::Attack { target: 2, ratio_permille: 1000 })]);
+    run(&mut game, 50);
+    (game.player(1).unwrap().tiles - tiles) as f64 / 198.0 / 5.0
+}
+
+#[test]
+#[ignore]
+fn measure_attack_pace() {
+    for n in [300, 1000, 3000] {
+        let (s, t) = neutral_expedition(n);
+        println!("terres libres, {n} soldats : {s:.1} s, {t} cases");
+    }
+    for (a, d) in [(5000, 2500), (5000, 5000), (2500, 5000)] {
+        println!("{a} contre {d} : {:.2} colonnes/s", front_speed(a, d));
+    }
+}
+
+#[test]
+fn expeditions_end_and_whole_front_advances() {
+    // Une expédition sur des terres libres s'épuise en moins d'une minute.
+    let (seconds, tiles) = neutral_expedition(3000);
+    assert!(seconds < 60.0 && tiles > 1000, "{seconds} s, {tiles} cases");
+    // Le front avance d'au moins une colonne par seconde à forces égales,
+    // et plus vite face à un défenseur faible.
+    let even = front_speed(5000, 5000);
+    assert!(even >= 1.0, "{even} colonnes/s");
+    assert!(front_speed(5000, 2500) > even * 1.5);
+}
+
+#[test]
+#[ignore]
+fn measure_expansion_shape() {
+    let mut game = start(test_map(200, 200, None), &[(100, 100)]);
+    let stats = |g: &Game| {
+        let (mut sx, mut sy, mut n) = (0i64, 0i64, 0i64);
+        let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0, u32::MAX, 0);
+        for t in 0..g.map().len() as TileIdx {
+            if g.owner(t) == 1 {
+                let (x, y) = g.map().xy(t);
+                sx += x as i64; sy += y as i64; n += 1;
+                x0 = x0.min(x); x1 = x1.max(x); y0 = y0.min(y); y1 = y1.max(y);
+            }
+        }
+        format!("{n} cases, centre ({:.1}, {:.1}), {} × {}", sx as f64 / n as f64, sy as f64 / n as f64, x1 - x0 + 1, y1 - y0 + 1)
+    };
+    println!("départ : {}", stats(&game));
+    for i in 0..8 {
+        game.player_mut(1).soldiers = [60_000, 0, 0];
+        game.tick(&[(1, Intent::Attack { target: NEUTRAL, ratio_permille: 500 })]);
+        run(&mut game, 100);
+        println!("expédition {} : {}", i + 1, stats(&game));
+    }
+}
+
+#[test]
+fn short_expeditions_grow_evenly() {
+    // Des expéditions courtes ne doivent pas toutes partir du même côté.
+    let mut game = start(test_map(200, 200, None), &[(100, 100)]);
+    for _ in 0..8 {
+        game.player_mut(1).soldiers = [60_000, 0, 0];
+        game.tick(&[(1, Intent::Attack { target: NEUTRAL, ratio_permille: 500 })]);
+        run(&mut game, 300);
+    }
+    let (mut sx, mut sy, mut n) = (0i64, 0i64, 0i64);
+    for t in 0..game.map().len() as TileIdx {
+        if game.owner(t) == 1 {
+            let (x, y) = game.map().xy(t);
+            sx += x as i64;
+            sy += y as i64;
+            n += 1;
+        }
+    }
+    let (cx, cy) = (sx as f64 / n as f64, sy as f64 / n as f64);
+    assert!((cx - 100.0).abs() < 2.0 && (cy - 100.0).abs() < 2.0, "centre ({cx:.1}, {cy:.1})");
+}

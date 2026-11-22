@@ -345,6 +345,7 @@ impl Game {
 
         let p = self.player_mut(id);
         let plan = p.plan.clone();
+        let before = p.resources;
 
         // Cibles par type d'unité (seuls les types débloqués).
         let mix_total: i64 = (0..UNIT_COUNT).filter(|&u| unlocked[u]).map(|u| plan.unit_mix[u] as i64).sum();
@@ -420,13 +421,22 @@ impl Game {
         } else {
             p.garrison_training = 1000;
         }
+        p.training_spend = Cost::new(
+            before.food - p.resources.food,
+            before.wood - p.resources.wood,
+            before.stone - p.resources.stone,
+            before.iron - p.resources.iron,
+        );
     }
 
     /// Répartit les travailleurs entre les métiers.
     fn assign_jobs(&mut self, id: PlayerId) {
         let slots = self.job_slots(id);
         let unlocked: Vec<bool> = Job::ALL.iter().map(|&j| self.job_unlocked(id, j)).collect();
-        let need_food = self.food_consumption(id) * (1000 + self.config.auto_food_margin_permille) / 1000;
+        // Marge de nourriture pour faire grandir la population ; inutile quand
+        // le logement est plein (l'excédent serait perdu) : 5 % de sécurité.
+        let margin = if self.population(id) >= self.housing(id) { 50 } else { self.config.auto_food_margin_permille };
+        let need_food = self.food_consumption(id) * (1000 + margin) / 1000;
         let base_food_yield = self.config.base_yield_milli[Job::Gatherer.index()];
 
         let p = self.player_ref(id);

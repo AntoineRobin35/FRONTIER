@@ -5,7 +5,7 @@
 //! cargo run --release -p frontier-session --example tune -- [graines...]
 
 use frontier_ai::Difficulty;
-use frontier_engine::{BuildingKind, GameConfig, GameEvent, Phase};
+use frontier_engine::{BuildingKind, GameConfig, GameEvent, Phase, NEUTRAL};
 use frontier_session::{Controller, Seat, Session, SessionSetup};
 use frontier_worldgen::MapSize;
 
@@ -32,6 +32,7 @@ fn run(name: &str, config: &GameConfig, seed: u64) {
     let mut session = Session::new(&setup).expect("session");
     let (mut filled, mut stone, mut iron, mut first_kill) = (None, None, None, None);
     let mut snapshots = Vec::new();
+    let mut wars = 0; // attaques entre joueurs lancées depuis le dernier relevé
     while session.game().tick_count() < MAX_TICKS {
         let update = session.step();
         let tick = update.tick;
@@ -40,6 +41,7 @@ fn run(name: &str, config: &GameConfig, seed: u64) {
                 GameEvent::BuildingCompleted { kind: BuildingKind::Academy, .. } if stone.is_none() => stone = Some(tick),
                 GameEvent::ResearchCompleted { level: 3, .. } if iron.is_none() => iron = Some(tick),
                 GameEvent::Eliminated { .. } if first_kill.is_none() => first_kill = Some(tick),
+                GameEvent::AttackStarted { target, .. } if *target != NEUTRAL => wars += 1,
                 _ => {}
             }
         }
@@ -53,7 +55,8 @@ fn run(name: &str, config: &GameConfig, seed: u64) {
         if tick.is_multiple_of(6_000) && tick > 0 {
             let pop: i64 = game.players().iter().map(|p| game.population(p.id)).sum::<i64>() / 1000;
             let alive = game.players().iter().filter(|p| p.alive).count();
-            snapshots.push(format!("{}min:pop{}/{}vivants", tick / 600, pop / alive.max(1) as i64, alive));
+            snapshots.push(format!("{}min:pop{}/{}viv/{}att", tick / 600, pop / alive.max(1) as i64, alive, wars));
+            wars = 0;
         }
         if matches!(game.phase(), Phase::Ended { .. }) {
             break;

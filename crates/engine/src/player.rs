@@ -27,6 +27,9 @@ pub struct Player {
 
     /// Stocks (milli).
     pub resources: Cost,
+    /// Ressources dépensées au dernier tour pour former soldats et garnison
+    /// (milli). Sert à afficher le vrai solde par seconde.
+    pub training_spend: Cost,
     /// Niveau atteint dans chaque technologie de l'Académie.
     pub techs: [u8; TECH_COUNT],
     /// Recherche en cours.
@@ -66,6 +69,7 @@ impl Player {
             alive: true,
             spawn_tile: None,
             resources: Cost::default(),
+            training_spend: Cost::default(),
             techs: [0; TECH_COUNT],
             research: None,
             workers: 0,

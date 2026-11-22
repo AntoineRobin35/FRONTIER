@@ -75,6 +75,14 @@ impl BotCore {
 
     /// Demande une répartition de population si elle diffère de l'actuelle.
     pub fn ensure_plan(&self, game: &Game, me: PlayerId, mut plan: PopulationPlan, out: &mut Vec<Intent>) {
+        // Mobilisation : une fois le logement plein (après 15 min), les bras en
+        // trop ne font plus grandir la population ; ils deviennent des soldats.
+        let minutes = game.started_at().map_or(0, |t| game.tick_count().saturating_sub(t) / 600);
+        let housing = game.housing(me);
+        if minutes >= 15 && housing > 0 && game.population(me) * 100 >= housing * 95 {
+            let room = 1000u16.saturating_sub(plan.garrison_permille);
+            plan.soldiers_permille = (plan.soldiers_permille + 250).min(600).min(room);
+        }
         if self.difficulty == Difficulty::Easy {
             plan.soldiers_permille = plan.soldiers_permille * 4 / 5;
         }
@@ -243,6 +251,9 @@ impl BotCore {
         let regions = game.regions();
         let home = game.player(me)?.spawn_tile.map(|t| map.xy(t))?;
         let my_power = Self::strike_power(game, me, 500);
+        // Après 30 min, on ose débarquer chez n'importe quel joueur (le moins
+        // défendu de préférence) : sinon les îles ne se battent jamais.
+        let late = game.started_at().is_some_and(|t| game.tick_count().saturating_sub(t) >= 30 * 600);
 
         let mut best: Option<(i64, TileIdx)> = None;
         for _ in 0..600 {
@@ -259,6 +270,8 @@ impl BotCore {
                 1_000_000
             } else if goal == NavalGoal::Any && game.defense_power(owner) * 2 < my_power {
                 0
+            } else if goal == NavalGoal::Any && late {
+                -game.defense_power(owner) / 1000
             } else {
                 continue;
             };

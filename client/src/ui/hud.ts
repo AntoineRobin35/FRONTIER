@@ -68,6 +68,14 @@ const EDIT_GRACE_MS = 1500;
 /** Rafraîchissement des nombres : assez pour suivre, pas assez pour clignoter. */
 const RENDER_INTERVAL_MS = 300;
 
+/** Métier qui produit chaque ressource (index dans `jobs`). */
+const RESOURCE_JOB: Record<'food' | 'wood' | 'stone' | 'iron', { index: number; name: string }> = {
+  food: { index: 0, name: 'cueilleurs' },
+  wood: { index: 1, name: 'bûcherons' },
+  stone: { index: 2, name: 'mineurs' },
+  iron: { index: 3, name: 'forgerons' },
+};
+
 const RESOURCE_TIPS: Record<string, string> = {
   food: 'Nourriture : nourrit ta population. Si elle manque, la population baisse. Un excédent la fait grandir.',
   wood: 'Bois : sert à construire et à former les soldats.',
@@ -305,9 +313,21 @@ export class Hud {
             .map((r) => {
               const amount = me.resources[r.key];
               const full = amount >= me.storage * 0.98;
-              const rate = me.production[r.key] - (r.key === 'food' ? me.food_consumption : 0);
+              // Vrai solde : production − consommation − formation des soldats.
+              const eaten = r.key === 'food' ? me.food_consumption : 0;
+              const training = me.training_spend[r.key];
+              const rate = me.production[r.key] - eaten - training;
               const sign = rate >= 0 ? '+' : '';
-              const tip = `${RESOURCE_TIPS[r.key]} Stock ${formatNumber(amount)} sur ${formatNumber(me.storage)} max${full ? ' : réserve pleine, la production se perd' : ''}. ${sign}${formatNumber(rate)} par seconde.`;
+              const job = RESOURCE_JOB[r.key];
+              const workers = me.jobs[job.index];
+              const parts = [`produit +${formatNumber(me.production[r.key])}/s (${formatNumber(workers)} ${job.name})`];
+              if (eaten > 0) parts.push(`mangé −${formatNumber(eaten)}/s`);
+              if (training > 0) parts.push(`formation des soldats −${formatNumber(training)}/s`);
+              const why =
+                workers === 0 && r.key === 'wood' && me.jobs[0] > 0
+                  ? ' Aucun bûcheron : tous tes travailleurs cueillent pour nourrir la population (un soldat mange 1,5 fois plus qu’un travailleur).'
+                  : '';
+              const tip = `${RESOURCE_TIPS[r.key]} Solde ${sign}${formatNumber(rate)}/s : ${parts.join(', ')}.${why} Stock ${formatNumber(amount)} sur ${formatNumber(me.storage)} max${full ? ' : réserve pleine, la production se perd' : ''}.`;
               return `<div class="res ${full ? 'full' : ''}" data-tip="${escapeHtml(tip)}">
                 <span class="res-icon" style="color:${r.color}">${r.icon}</span>
                 <b>${formatNumber(amount)}</b><small class="${rate < 0 ? 'neg' : ''}">${sign}${formatNumber(rate)}/s</small>

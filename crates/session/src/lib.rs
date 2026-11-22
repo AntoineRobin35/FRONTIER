@@ -188,6 +188,7 @@ fn player_view<'a>(game: &'a Game, id: PlayerId, per_second: i64) -> PlayerView<
         storage: game.storage(id) / MILLI,
         production: units(production.scaled(per_second, 1)),
         food_consumption: game.food_consumption(id) * per_second / MILLI,
+        training_spend: units(p.training_spend.scaled(per_second, 1)),
         training_rate: game.training_rate(id) * per_second / MILLI,
         plan: &p.plan,
         unit_unlocked: Unit::ALL.map(|u| game.unit_unlocked(id, u)),
@@ -239,6 +240,8 @@ pub struct PlayerView<'a> {
     pub resources: Cost,
     pub storage: i64,
     pub production: Cost,
+    /// Dépense par seconde pour former soldats et garnison.
+    pub training_spend: Cost,
     pub food_consumption: i64,
     pub training_rate: i64,
     pub plan: &'a PopulationPlan,

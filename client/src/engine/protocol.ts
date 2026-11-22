@@ -155,6 +155,8 @@ export interface PlayerView {
   storage: number;
   production: Cost;
   food_consumption: number;
+  /** Dépense par seconde pour former soldats et garnison. */
+  training_spend: Cost;
   training_rate: number;
   plan: PopulationPlan;
   unit_unlocked: [boolean, boolean, boolean];

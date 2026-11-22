@@ -438,6 +438,11 @@ impl Game {
         }
     }
 
+    /// Identifiant que recevra le prochain objet (sans le consommer).
+    pub(crate) fn peek_id(&self) -> u32 {
+        self.next_id
+    }
+
     pub(crate) fn next_id(&mut self) -> u32 {
         let id = self.next_id;
         self.next_id += 1;

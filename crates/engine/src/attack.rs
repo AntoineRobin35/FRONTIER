@@ -11,7 +11,7 @@
 //! milli (1000 = un guerrier de l'âge du Bois).
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, BinaryHeap};
 
 use crate::defs::{BuildingKind, Effect, Unit, UNIT_COUNT};
 use crate::game::{Game, Phase};
@@ -33,9 +33,24 @@ pub struct Attack {
     pub(crate) progress: i64,
     /// Cases à prendre, les plus proches et les moins chères d'abord.
     pub(crate) frontier: BinaryHeap<Reverse<FrontierEntry>>,
+    /// Cases distinctes du front : sa largeur. Tout le front avance en même
+    /// temps, donc la vitesse (en cases par tour) est proportionnelle à cette
+    /// largeur, comme dans OpenFront.
+    pub(crate) border: BTreeSet<TileIdx>,
 }
 
 impl Attack {
+    /// Ajoute une case au front.
+    pub(crate) fn push_front(&mut self, entry: FrontierEntry) {
+        self.border.insert(entry.tile);
+        self.frontier.push(Reverse(entry));
+    }
+
+    /// Largeur du front (au moins 1).
+    pub fn width(&self) -> i64 {
+        self.border.len().max(1) as i64
+    }
+
     /// Nombre de soldats (milli).
     pub fn soldiers(&self) -> i64 {
         self.units.iter().sum()
@@ -224,14 +239,23 @@ impl Game {
         units: [i64; UNIT_COUNT],
         seeds: Vec<TileIdx>,
     ) {
-        let entries = seeds.into_iter().map(|tile| {
-            Reverse(FrontierEntry {
-                priority: 0,
+        let troops = units.iter().sum::<i64>() / 1000;
+        // Les cases de départ ont aussi une priorité bruitée : sinon, à égalité,
+        // elles partent dans l'ordre du tableau (du haut vers le bas) et une
+        // expédition courte ne grandit que vers le nord.
+        let salt = self
+            .attacks
+            .iter()
+            .find(|a| a.attacker == attacker && a.target == target)
+            .map_or(self.peek_id(), |a| a.id);
+        let entries: Vec<FrontierEntry> = seeds
+            .into_iter()
+            .map(|tile| FrontierEntry {
+                priority: self.frontier_priority(tile, tile, salt),
                 tile,
                 source: tile,
             })
-        });
-        let troops = units.iter().sum::<i64>() / 1000;
+            .collect();
 
         if let Some(existing) = self
             .attacks
@@ -241,7 +265,9 @@ impl Game {
             for u in 0..UNIT_COUNT {
                 existing.units[u] += units[u];
             }
-            existing.frontier.extend(entries);
+            for entry in entries {
+                existing.push_front(entry);
+            }
             let attack_id = existing.id;
             self.update.events.push(GameEvent::AttackReinforced {
                 attack_id,
@@ -253,16 +279,19 @@ impl Game {
         }
 
         let id = self.next_id();
-        let mut frontier = BinaryHeap::new();
-        frontier.extend(entries);
-        self.attacks.push(Attack {
+        let mut attack = Attack {
             id,
             attacker,
             target,
             units,
             progress: 0,
-            frontier,
-        });
+            frontier: BinaryHeap::new(),
+            border: BTreeSet::new(),
+        };
+        for entry in entries {
+            attack.push_front(entry);
+        }
+        self.attacks.push(attack);
         self.update.events.push(GameEvent::AttackStarted {
             attack_id: id,
             attacker,
@@ -369,7 +398,8 @@ impl Game {
             let defense = self.defense_power(attack.target);
             (defense * 1000 / power, cfg.attack_speed_permille)
         };
-        let speed = speed * self.army_speed(&attack.units) / 1000;
+        // La vitesse est donnée par case de front : tout le front avance.
+        let speed = speed * self.army_speed(&attack.units) / 1000 * attack.width();
         // Réserve d'avancée : assez pour franchir la case la plus lente.
         attack.progress = (attack.progress + speed).min(speed * 4 + 20_000);
 
@@ -384,6 +414,7 @@ impl Game {
                 || !self.touches(tile, attack.attacker)
             {
                 attack.frontier.pop();
+                attack.border.remove(&tile);
                 continue; // entrée périmée
             }
 
@@ -396,6 +427,7 @@ impl Game {
                 return false; // l'attaque s'essouffle
             }
             attack.frontier.pop();
+            attack.border.remove(&tile);
             attack.progress -= tile_time;
             taken += 1;
 
@@ -411,11 +443,11 @@ impl Game {
             self.set_owner(tile, attack.attacker);
             for next in self.map.neighbors(tile) {
                 if self.owner(next) == attack.target && self.map.is_passable(next) {
-                    attack.frontier.push(Reverse(FrontierEntry {
+                    attack.push_front(FrontierEntry {
                         priority: self.frontier_priority(next, entry.source, attack.id),
                         tile: next,
                         source: entry.source,
-                    }));
+                    });
                 }
             }
         }
@@ -438,7 +470,9 @@ impl Game {
         // Les unités à l'aise sur ce terrain perdent moins.
         let raw = self.attack_power(attack.attacker, &attack.units).max(1);
         let here = self.attack_power_on(attack.attacker, &attack.units, tile, fort).max(1);
-        let loss = (cfg.base_tile_power_milli + density) * m / 1000 * loss_ratio / 1000 * raw / here;
+        let loss = (cfg.base_tile_power_milli + density * cfg.density_loss_permille / 1000) * m / 1000 * loss_ratio / 1000
+            * raw
+            / here;
         let time = m * speed_ratio / 1000;
         (time, loss)
     }
@@ -499,6 +533,7 @@ impl Game {
             units: *units,
             progress: 0,
             frontier: BinaryHeap::new(),
+            border: BTreeSet::new(),
         };
         let ratio = if defender == NEUTRAL {
             1000

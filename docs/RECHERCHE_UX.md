@@ -297,3 +297,36 @@ objectif actif) et ta consigne : **l'aide accompagne, elle ne dérange pas**.
   boutons réagissent à l'appui.
 - Simulations IA : terres prises vers 12-14 min, Académie vers 2-3 min, première
   élimination vers 10-22 min, la moitié des parties finies entre 38 et 54 min.
+
+## 13. Rythme du combat (22/11/2026)
+
+Constat en jouant : attaques trop lentes (5 000 contre 2 500 rampait), expéditions
+interminables (3 000 soldats sur des terres libres = plus de 5 min), guerres sans enjeu.
+
+Comparaison avec le code d'OpenFront (`EngineConfig.attackLogic`) :
+- chez eux, chaque tour, une attaque prend environ `largeur du front ÷ coût` cases :
+  tout le front avance en même temps ; chez nous, le nombre de cases par tour était
+  fixe, quelle que soit la largeur (≈ 25 fois plus lent sur un large front) ;
+- une case libre leur coûte ≈ 1,6 troupe ; chez nous 0,08 soldat (20 fois moins).
+
+Décisions (volontairement plus lent qu'OpenFront : « 500 ans en 50 min ») :
+- **Tout le front avance** : vitesse par case de front (`attack_speed_permille` 120).
+  À forces égales ≈ 1,2 case/s (OpenFront ≈ 5), contre un défenseur 2 fois plus
+  faible ≈ 2,4 cases/s, au plus 2 fois la vitesse d'égalité (`speed_ratio_min` 500).
+- **Terres libres** : 0,4 soldat par case ; une expédition dure 30 à 40 s, puis il
+  faut renvoyer du monde (retour de test : 0,7 soldat et 10 s, c'était trop court
+  et trop cher).
+- **Une terre occupée coûte au moins autant qu'une terre libre** (base 0,5 soldat,
+  pertes au moins ×0,8), sinon on avalait un voisin vidé par l'expansion en 2 min.
+- **Densité** : l'attaquant paie 40 % de la densité du défenseur ; le défenseur perd
+  toute sa densité à chaque case perdue. Une erreur se paie, les guerres tranchent.
+- **IA** : prudentes avant 15 min, puis de plus en plus audacieuses ; mobilisation
+  quand le logement est plein ; débarquements chez les voisins après 25-30 min.
+
+- **Bug corrigé** : les cases de départ d'une attaque avaient toutes la même
+  priorité, donc une expédition courte grandissait toujours vers le nord. Elles ont
+  maintenant une priorité bruitée (test `short_expeditions_grow_evenly`).
+
+Simulations (10 graines) : terres prises vers 9-10 min, première élimination vers
+9-22 min, parties finies entre 25 et plus de 66 min (forte variance entre IA). Mesures reproductibles :
+`cargo test --release -p frontier-engine measure_attack_pace -- --ignored --nocapture`.

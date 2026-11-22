@@ -47,10 +47,11 @@ pub(crate) fn strike_weakest(
     }
     let ratio = core.ratio(ratio);
     let mine = BotCore::strike_power(game, me, ratio);
-    // Plus la partie avance, plus on ose : -1,5 % d'exigence par minute
-    // après 15 minutes, jusqu'à -60 %.
+    // Début prudent (exigence ×1,5 avant 15 min), puis plus la partie avance,
+    // plus on ose : -2 % d'exigence par minute après 20 min, jusqu'à -80 %.
     let minutes = game.started_at().map_or(0, |s| game.tick_count().saturating_sub(s) / 600) as i64;
-    let margin = margin * (100 - ((minutes - 15) * 3 / 2).clamp(0, 60)) / 100;
+    let factor = if minutes < 15 { 150 } else { 100 - ((minutes - 20) * 2).clamp(0, 80) };
+    let margin = margin * factor / 100;
     let target = s
         .neighbors()
         .filter(|&id| !s.attacking(id))

@@ -160,6 +160,10 @@ pub struct GameConfig {
     pub fort_radius: u32,
     /// Puissance perdue par case prise, avant la densité du défenseur (milli).
     pub base_tile_power_milli: i64,
+    /// Poids de la densité du défenseur dans les pertes de l'attaquant (‰).
+    /// Comme dans OpenFront : un front dense coûte plus cher, mais l'attaquant
+    /// perd moins que la densité qu'il détruit.
+    pub density_loss_permille: i64,
     /// Part de sa densité que perd le défenseur à chaque case perdue (‰).
     pub defender_loss_permille: i64,
     /// Bornes du rapport défense / attaque pour les pertes et la vitesse (‰).
@@ -167,11 +171,12 @@ pub struct GameConfig {
     pub loss_ratio_max: i64,
     pub speed_ratio_min: i64,
     pub speed_ratio_max: i64,
-    /// Cases prises par tour à forces égales en plaine (‰).
+    /// Avancée par tour et par case de front, à forces égales en plaine (‰ de
+    /// case). Tout le front avance en même temps, comme dans OpenFront.
     pub attack_speed_permille: i64,
     /// Terres libres : coût par case (milli de puissance, × coût du terrain)…
     pub neutral_tile_power_milli: i64,
-    /// … et vitesse : cases par tour = puissance / échelle, bornée (‰).
+    /// … et vitesse par case de front : puissance / échelle, bornée (‰).
     pub neutral_speed_scale: i64,
     pub neutral_speed_min: i64,
     pub neutral_speed_max: i64,
@@ -370,17 +375,18 @@ impl Default for GameConfig {
             river_defense_permille: 1300,
             fort_defense_permille: 3000,
             fort_radius: 9,
-            base_tile_power_milli: 300,
-            defender_loss_permille: 700,
-            loss_ratio_min: 600,
+            base_tile_power_milli: 500,
+            density_loss_permille: 400,
+            defender_loss_permille: 1000,
+            loss_ratio_min: 800,
             loss_ratio_max: 2000,
-            speed_ratio_min: 250,
+            speed_ratio_min: 500,
             speed_ratio_max: 4000,
-            attack_speed_permille: 2500,
-            neutral_tile_power_milli: 80,
-            neutral_speed_scale: 50_000,
-            neutral_speed_min: 1500,
-            neutral_speed_max: 5000,
+            attack_speed_permille: 120,
+            neutral_tile_power_milli: 400,
+            neutral_speed_scale: 8_000_000,
+            neutral_speed_min: 35,
+            neutral_speed_max: 180,
             terrain_cost: per_terrain(&[
                 (Sand, 900),
                 (Grass, 1000),
@@ -393,7 +399,7 @@ impl Default for GameConfig {
             ]),
             retreat_loss_permille: 250,
             min_attack_soldiers: 10,
-            max_tiles_per_tick: 400,
+            max_tiles_per_tick: 3000,
 
             boat_wood: 150,
             boat_speed: 3,

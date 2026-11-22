@@ -59,6 +59,8 @@ impl Agent for Colon {
         }
         let s = sense(game, me);
         let threatened = !s.incoming.is_empty();
+        // Après 25 min, le colon ose aussi débarquer chez un voisin faible.
+        let late = game.started_at().is_some_and(|t| game.tick_count().saturating_sub(t) >= 25 * 600);
         let plan = PopulationPlan {
             soldiers_permille: if threatened { 300 } else { 170 },
             garrison_permille: if game.owned_count(me, Academy) > 0 { 60 } else { 0 },
@@ -79,7 +81,7 @@ impl Agent for Colon {
             return;
         }
         if s.neutral_border() == 0 && s.boats_at_sea == 0 {
-            if let Some(tile) = self.core.naval_target(game, me, &s, NavalGoal::Settle) {
+            if let Some(tile) = self.core.naval_target(game, me, &s, if late { NavalGoal::Any } else { NavalGoal::Settle }) {
                 out.push(Intent::Naval { tile, ratio_permille: self.core.ratio(400) });
                 return;
             }
