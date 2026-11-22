@@ -1,0 +1,10 @@
+[package]
+name = "frontier-worldgen"
+description = "Génération procédurale des mondes de FRONTIER"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+frontier-engine.workspace = true
+serde.workspace = true
+libm.workspace = true

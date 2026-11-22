@@ -1,0 +1,20 @@
+[package]
+name = "frontier-wasm"
+description = "Liaison WebAssembly du moteur de FRONTIER pour le navigateur"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+frontier-engine.workspace = true
+frontier-ai.workspace = true
+frontier-session.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

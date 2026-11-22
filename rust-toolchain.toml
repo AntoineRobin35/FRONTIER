@@ -1,0 +1,6 @@
+# Version de Rust figée : le client (WebAssembly) et le futur serveur
+# doivent être compilés avec le même compilateur pour rester déterministes.
+[toolchain]
+channel = "1.100.0"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]

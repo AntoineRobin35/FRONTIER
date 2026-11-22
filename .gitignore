@@ -1,0 +1,7 @@
+/target
+/client/node_modules
+/client/dist
+/client/wasm-pkg
+*.log
+.idea/
+.vscode/

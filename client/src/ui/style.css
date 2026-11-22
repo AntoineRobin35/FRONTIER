@@ -1,0 +1,397 @@
+/* Direction artistique : carte peinte, panneaux sombres translucides, police à chasse fixe. */
+
+:root {
+  --bg: #0f1923;
+  --panel: rgba(12, 18, 25, 0.86);
+  --panel-strong: rgba(12, 18, 25, 0.94);
+  --line: rgba(200, 210, 220, 0.14);
+  --text: #f0f0f0;
+  --text-dim: #c3cdd7;
+  --text-mute: #8a97a4;
+  --accent: #dcaf41;
+  --accent-ink: #1b1406;
+  --good: #8fc08a;
+  --bad: #e07a6a;
+  --gold: #f0cd78;
+  --font: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, monospace;
+  --radius: 6px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  backdrop-filter: blur(4px);
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------- Menu */
+
+.menu {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(105, 139, 87, 0.18), transparent 60%),
+    radial-gradient(ellipse at 70% 80%, rgba(42, 91, 116, 0.35), transparent 60%),
+    var(--bg);
+}
+
+.menu-card {
+  width: min(620px, 100%);
+  padding: 28px 28px 24px;
+  background: var(--panel-strong);
+}
+
+.menu h1 {
+  margin: 0;
+  font-size: 44px;
+  letter-spacing: 0.32em;
+  font-weight: 700;
+}
+
+.menu .tagline {
+  margin: 6px 0 22px;
+  color: var(--text-mute);
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.field > span,
+.section-title {
+  color: var(--text-mute);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.section-title {
+  margin: 18px 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+input[type='text'],
+input[type='number'],
+select {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 7px 9px;
+  min-width: 0;
+  width: 100%;
+}
+
+select option {
+  background: #141d27;
+}
+
+.seed-input {
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 11px 18px;
+}
+
+.btn-primary:hover {
+  background: #e8c15a;
+}
+
+.btn-small {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.opponents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opponent {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.8fr) 30px;
+  gap: 8px;
+  align-items: center;
+}
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.agent-help {
+  color: var(--text-mute);
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 2.6em;
+}
+
+.menu-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.menu-error {
+  color: var(--bad);
+  margin-top: 10px;
+}
+
+/* Le style de l'écran de jeu est dans game.css. */
+
+@media (max-width: 760px) {
+  .opponent {
+    grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr) 30px;
+  }
+  .opponent .diff {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- Tutoriel */
+
+.menu-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tutorial-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 8, 12, 0.6);
+  z-index: 30;
+}
+
+.tutorial {
+  width: min(560px, 100%);
+  padding: 18px 22px;
+  background: var(--panel-strong);
+}
+
+.tuto-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-mute);
+  font-size: 12px;
+}
+
+.tutorial h2 {
+  margin: 8px 0 10px;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.tuto-body {
+  min-height: 210px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  font-size: 13.5px;
+}
+
+.tuto-body p {
+  margin: 0 0 10px;
+}
+
+.tuto-body ul {
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+
+.tuto-body li {
+  margin-bottom: 4px;
+}
+
+.tuto-body ul.legend {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.tuto-body b {
+  color: var(--text);
+}
+
+.tuto-body .small {
+  font-size: 12px;
+  color: var(--text-mute);
+}
+
+.tuto-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.dots {
+  display: flex;
+  gap: 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dot.on {
+  background: var(--gold);
+}
+
+.keys {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.keys td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.keys td:first-child {
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+/* Schéma de l'écran de jeu. */
+.hud-map {
+  position: relative;
+  height: 190px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: linear-gradient(135deg, rgba(105, 139, 87, 0.35), rgba(42, 91, 116, 0.45));
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+
+.hm {
+  position: absolute;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: rgba(12, 18, 25, 0.9);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+
+.hm.top {
+  top: 4px;
+  left: 4px;
+  right: 4px;
+}
+
+.hm.obj {
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--gold);
+}
+
+.hm.left {
+  top: 56px;
+  left: 4px;
+  width: 30%;
+}
+
+.hm.right {
+  top: 56px;
+  right: 4px;
+  width: 26%;
+}
+
+.hm.bottom {
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.hm.map {
+  top: 112px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34%;
+  background: transparent;
+  border-style: dashed;
+  color: var(--text);
+}

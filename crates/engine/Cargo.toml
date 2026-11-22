@@ -1,0 +1,8 @@
+[package]
+name = "frontier-engine"
+description = "Moteur de simulation déterministe de FRONTIER"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "frontier-session"
+description = "Assemble une partie : carte, moteur, joueurs humains et IA"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+frontier-engine.workspace = true
+frontier-worldgen.workspace = true
+frontier-ai.workspace = true
+serde.workspace = true

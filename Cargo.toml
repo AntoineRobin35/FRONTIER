@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/worldgen",
+    "crates/ai",
+    "crates/session",
+    "crates/wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+frontier-engine = { path = "crates/engine" }
+frontier-worldgen = { path = "crates/worldgen" }
+frontier-ai = { path = "crates/ai" }
+frontier-session = { path = "crates/session" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libm = "0.2"
+
+[profile.dev]
+# La simulation est trop lente sans un minimum d'optimisation.
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

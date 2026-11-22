@@ -1,0 +1,9 @@
+[package]
+name = "frontier-ai"
+description = "Interface commune des IA de FRONTIER et IA de base"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+frontier-engine.workspace = true
+serde.workspace = true
