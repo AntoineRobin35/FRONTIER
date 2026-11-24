@@ -74,18 +74,20 @@ impl Game {
 
     /// Puissance d'attaque brute d'une armée (milli), sans terrain.
     pub fn attack_power(&self, owner: PlayerId, units: &[i64; UNIT_COUNT]) -> i64 {
-        Unit::ALL
+        let raw: i64 = Unit::ALL
             .iter()
             .map(|&u| {
                 let base = units[u.index()] * self.config.unit(u).attack_permille / 1000;
                 self.boosted(owner, Effect::UnitAttack(u), base)
             })
-            .sum()
+            .sum();
+        raw * self.equipment_factor(owner) / 1000
     }
 
     /// Puissance d'attaque sur une case précise (terrain, fort).
     fn attack_power_on(&self, owner: PlayerId, units: &[i64; UNIT_COUNT], tile: TileIdx, fort: bool) -> i64 {
         let open = self.config.terrain_open[self.map.terrain(tile) as usize];
+        let equipment = self.equipment_factor(owner);
         Unit::ALL
             .iter()
             .map(|&u| {
@@ -93,7 +95,7 @@ impl Game {
                 let terrain = if open { def.open_permille } else { def.rough_permille };
                 let siege = if fort { def.siege_permille } else { 1000 };
                 let base = units[u.index()] * def.attack_permille / 1000 * terrain / 1000 * siege / 1000;
-                self.boosted(owner, Effect::UnitAttack(u), base)
+                self.boosted(owner, Effect::UnitAttack(u), base) * equipment / 1000
             })
             .sum()
     }
@@ -101,12 +103,21 @@ impl Game {
     /// Défense totale d'un joueur (milli) : soldats à la maison et garnison.
     pub fn defense_power(&self, id: PlayerId) -> i64 {
         let Some(p) = self.player(id) else { return 0 };
-        let soldiers: i64 = Unit::ALL
+        self.soldier_defense(id, &p.soldiers) + self.garrison_defense(id, p.garrison, p.garrison_training)
+    }
+
+    /// Défense apportée par des soldats à la maison (milli).
+    pub fn soldier_defense(&self, id: PlayerId, soldiers: &[i64; UNIT_COUNT]) -> i64 {
+        let raw: i64 = Unit::ALL
             .iter()
-            .map(|&u| p.soldiers[u.index()] * self.config.unit(u).defense_permille / 1000)
+            .map(|&u| soldiers[u.index()] * self.config.unit(u).defense_permille / 1000)
             .sum();
-        let garrison = p.garrison * p.garrison_training / 1000;
-        self.boosted(id, Effect::SoldierDefense, soldiers) + self.boosted(id, Effect::GarrisonDefense, garrison)
+        self.boosted(id, Effect::SoldierDefense, raw) * self.equipment_factor(id) / 1000
+    }
+
+    /// Défense apportée par une garnison entraînée à `training` ‰ (milli).
+    pub fn garrison_defense(&self, id: PlayerId, garrison: i64, training: i64) -> i64 {
+        self.boosted(id, Effect::GarrisonDefense, garrison * training / 1000)
     }
 
     /// Multiplicateur défensif d'une case (‰) : terrain, rivière, fort.
@@ -455,7 +466,7 @@ impl Game {
     }
 
     /// Temps (‰ de case) et pertes (milli de puissance) pour prendre une case.
-    fn tile_price(&self, attack: &Attack, tile: TileIdx, ratio: i64) -> (i64, i64) {
+    pub(crate) fn tile_price(&self, attack: &Attack, tile: TileIdx, ratio: i64) -> (i64, i64) {
         let cfg = &self.config;
         if attack.target == NEUTRAL {
             let cost = cfg.terrain_cost[self.map.terrain(tile) as usize].max(100);

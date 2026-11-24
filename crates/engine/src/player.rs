@@ -38,11 +38,15 @@ pub struct Player {
     /// Travailleurs (milli), et leur répartition par métier ce tour-ci.
     pub workers: i64,
     pub jobs: [i64; JOB_COUNT],
+    /// Travailleurs expérimentés par métier (milli), au plus `jobs`.
+    pub veterans: [i64; JOB_COUNT],
     /// Soldats mobiles à la maison (milli), par type.
     pub soldiers: [i64; UNIT_COUNT],
     /// Garnison (milli) et son niveau d'entraînement (‰, de 1000 à 3000).
     pub garrison: i64,
     pub garrison_training: i64,
+    /// Part de l'armée équipée de fer (‰, moyenne sur tous les soldats).
+    pub equipment: i64,
     pub plan: PopulationPlan,
 
     /// Bâtiments terminés, par type.
@@ -74,9 +78,11 @@ impl Player {
             research: None,
             workers: 0,
             jobs: [0; JOB_COUNT],
+            veterans: [0; JOB_COUNT],
             soldiers: [0; UNIT_COUNT],
             garrison: 0,
             garrison_training: 1000,
+            equipment: 0,
             plan: PopulationPlan::default(),
             buildings: [0; BUILDING_COUNT],
         }

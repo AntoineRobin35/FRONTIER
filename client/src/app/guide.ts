@@ -9,7 +9,7 @@
 //
 // Le guide ne fait que lire l'état : il ne joue jamais à la place du joueur.
 
-import { BUILDINGS, DEPOSITS, type BuildingKind, type Deposit, type MapPayload, type PlayerView, type Snapshot } from '../engine/protocol';
+import { BUILDINGS, DEPOSITS, type BuildingKind, type Deposit, type Insight, type MapPayload, type PlayerView, type Snapshot } from '../engine/protocol';
 import { formatNumber } from '../ui/format';
 import type { HelpTip } from '../ui/hud';
 import { canPay } from '../ui/labels';
@@ -54,7 +54,7 @@ export class Guide {
     return this.done.has(id);
   }
 
-  compute(snap: Snapshot, owners: Uint16Array): Guidance {
+  compute(snap: Snapshot, owners: Uint16Array, insight: Insight | null = null): Guidance {
     const me = snap.players.find((p) => p.id === this.me);
     if (!me) return { objective: null, alerts: [] };
     if (snap.phase.type === 'spawn') {
@@ -75,7 +75,7 @@ export class Guide {
       this.survey = this.computeSurvey(snap, owners);
       this.surveyAge = 0;
     }
-    return { objective: this.nextObjective(snap, me, this.survey), alerts: this.alerts(snap, me) };
+    return { objective: this.nextObjective(snap, me, this.survey, insight), alerts: this.alerts(snap, me) };
   }
 
   private computeSurvey(snap: Snapshot, owners: Uint16Array): Survey {
@@ -91,7 +91,7 @@ export class Guide {
   }
 
   /** Premier objectif non atteint de la liste, dans l'ordre. */
-  private nextObjective(snap: Snapshot, me: PlayerView, survey: Survey): Objective | null {
+  private nextObjective(snap: Snapshot, me: PlayerView, survey: Survey, insight: Insight | null): Objective | null {
     const owned = (kind: BuildingKind) => snap.buildings.some((b) => b.owner === this.me && b.kind === kind);
     const steps: { id: string; reached: boolean; make: () => Objective }[] = [
       {
@@ -230,10 +230,37 @@ export class Guide {
         why: 'Il reste des terres libres : prends-les avant les autres. Construis sur tes gisements, et attaque un voisin quand ta force dépasse nettement la sienne.',
       };
     }
+    return this.opportunity(snap, insight);
+  }
+
+  /**
+   * Milieu de partie : plus de consigne, une opportunité lue dans l'état.
+   * Les estimations viennent du moteur (mêmes formules que le combat).
+   */
+  private opportunity(snap: Snapshot, insight: Insight | null): Objective {
+    const name = (id: number) => snap.players.find((p) => p.id === id)?.name ?? '?';
+    const rivals = (insight?.estimates ?? []).filter((e) => e.target !== 0);
+    const best = [...rivals].sort((a, b) => Number(b.conquers_all) - Number(a.conquers_all) || b.share_permille - a.share_permille)[0];
+    if (best && (best.conquers_all || best.share_permille >= 250)) {
+      const share = best.conquers_all ? 'tout son territoire' : `≈ ${Math.round(best.share_permille / 10)} % de ses terres`;
+      return {
+        id: `prey-${best.target}`,
+        title: `${name(best.target)} est à ta portée`,
+        why: `Ton envoi (⚔ ${formatNumber(best.power)}) contre sa défense (🛡 ${formatNumber(best.defense)}) prendrait ${share}. Survole son territoire pour le détail, clique pour attaquer.`,
+      };
+    }
+    if (rivals.length) {
+      return {
+        id: 'outmatched',
+        title: 'Aucun voisin à ta portée',
+        why: 'Avec ton envoi actuel, aucune attaque ne mordrait vraiment (survole un voisin pour voir). Renforce-toi : plus de soldats, envoi plus grand, recherches militaires. Ou attends qu’ils s’usent entre eux.',
+        highlight: 'soldiers',
+      };
+    }
     return {
-      id: 'conquest',
-      title: 'Conquiers : 80 % des terres pour gagner',
-      why: 'Les terres libres sont prises. Attaque le voisin le moins défendu (⚔ dans le classement), protège tes frontières avec des forts.',
+      id: 'overseas',
+      title: 'Tes rivaux sont au-delà de la mer',
+      why: 'Aucun voisin par la terre : clique sur une côte ennemie pour y envoyer un bateau. Contrôle 80 % des terres pour gagner.',
     };
   }
 

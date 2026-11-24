@@ -13,10 +13,10 @@ export interface Label {
   y: number;
   tiles: number;
   name: string;
-  /** Soldats qui défendent le territoire (maison + garnison). */
-  troops: number;
-  /** Soldats partis en attaque. */
-  away: number;
+  /** Soldats à la maison (ce qui peut frapper en retour). */
+  soldiers: number;
+  /** Force de la garnison (défense pure, entraînement compris). */
+  garrison: number;
   color: Rgb;
 }
 
@@ -98,8 +98,9 @@ export class Overlay {
       ctx.font = `${small.toFixed(1)}px Consolas, "Cascadia Mono", monospace`;
       ctx.lineWidth = Math.max(2, small * 0.2);
       ctx.fillStyle = rgbCss(label.color.map((c) => Math.min(255, c + 60)) as Rgb);
-      // Soldats qui défendent, et à part ceux partis en attaque.
-      const troops = `⚔ ${formatNumber(label.troops)}` + (label.away > 0 ? `  → ${formatNumber(label.away)}` : '');
+      // Force de la garnison, puis soldats à la maison. Les troupes parties
+      // en campagne ne se voient pas d'ici.
+      const troops = (label.garrison > 0 ? `🛡 ${formatNumber(label.garrison)}  ` : '') + `⚔ ${formatNumber(label.soldiers)}`;
       ctx.strokeText(troops, sx, sy + size * 0.95);
       ctx.fillText(troops, sx, sy + size * 0.95);
     }

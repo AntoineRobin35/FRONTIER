@@ -7,6 +7,7 @@ import {
   type BuildingKind,
   type FromWorker,
   type GameEvent,
+  type Insight,
   type Intent,
   type MapPayload,
   type PopulationPlan,
@@ -47,6 +48,8 @@ export class GameScreen {
   private anchorsAge = Infinity;
 
   private ratio = 500;
+  /** Aperçus du moteur (estimations d'attaque, curseurs, bâtiments). */
+  private insight: Insight | null = null;
   private speedIndex = 0;
   private paused = false;
   private ended = false;
@@ -83,7 +86,10 @@ export class GameScreen {
     this.renderer = new Renderer(canvas);
     this.overlay = new Overlay(overlayCanvas);
     this.hud = new Hud(seats, {
-      onRatio: (permille) => (this.ratio = permille),
+      onRatio: (permille) => this.setRatio(permille),
+      onFocusPlayer: (id) => this.focusPlayer(id),
+      onFocusTile: (tile) => this.focusTile(tile),
+      ownerOf: (tile) => this.owners?.[tile] ?? 0,
       onCancelAttack: (attackId) => this.send({ type: 'cancel_attack', attack_id: attackId }),
       onPlan: (plan: PopulationPlan) => this.send({ type: 'set_plan', plan }),
       onResearch: (tech) => this.send({ type: 'research', tech }),
@@ -97,6 +103,7 @@ export class GameScreen {
     this.bindInput(canvas);
     requestAnimationFrame(this.frame);
     worker.postMessage({ kind: 'start', setup: setup.setup, human: HUMAN_ID });
+    worker.postMessage({ kind: 'ratio', ratio: this.ratio });
   }
 
   destroy(): void {
@@ -118,6 +125,10 @@ export class GameScreen {
         break;
       case 'tick':
         this.onTick(msg.snapshot, msg.changes);
+        break;
+      case 'insight':
+        this.insight = msg.insight;
+        this.hud.setInsight(msg.insight);
         break;
       case 'error':
         this.hud.log(`Erreur moteur : ${msg.message}`, 'danger');
@@ -160,7 +171,7 @@ export class GameScreen {
     for (const event of snapshot.events) this.onEvent(event, snapshot);
 
     if (this.guide) {
-      this.guidance = this.guide.compute(snapshot, owners);
+      this.guidance = this.guide.compute(snapshot, owners, this.insight);
       this.hud.showObjective(this.guidance.objective, this.guidance.alerts);
       if (this.hud.helpOpen) this.hud.showHelp(this.guidance.objective, this.guidance.alerts);
     }
@@ -300,7 +311,7 @@ export class GameScreen {
       .filter((p) => p.alive && anchors.has(p.id))
       .map((p) => {
         const [x, y] = anchors.get(p.id)!;
-        return { x, y, tiles: p.tiles, name: p.name, troops: homeForce(p), away: p.away, color: this.colors.get(p.id)! };
+        return { x, y, tiles: p.tiles, name: p.name, soldiers: soldiersAt(p), garrison: p.garrison_power, color: this.colors.get(p.id)! };
       });
   }
 
@@ -310,8 +321,8 @@ export class GameScreen {
     for (const label of this.labels) {
       const p = snap.players.find((q) => q.name === label.name);
       if (p) {
-        label.troops = homeForce(p);
-        label.away = p.away;
+        label.soldiers = soldiersAt(p);
+        label.garrison = p.garrison_power;
         label.tiles = p.tiles;
       }
     }
@@ -556,8 +567,30 @@ export class GameScreen {
   };
 
   private adjustRatio(delta: number): void {
-    this.ratio = Math.max(50, Math.min(1000, this.ratio + delta));
-    this.hud.setRatio(this.ratio);
+    this.setRatio(Math.max(50, Math.min(1000, this.ratio + delta)));
+  }
+
+  /** Part des soldats envoyés : l'interface et les estimations du moteur suivent. */
+  private setRatio(permille: number): void {
+    this.ratio = permille;
+    this.hud.setRatio(permille);
+    this.worker.postMessage({ kind: 'ratio', ratio: permille });
+  }
+
+  /** Centre la carte sur le territoire d'un joueur (sans changer le zoom). */
+  private focusPlayer(id: number): void {
+    const name = this.snapshot?.players.find((p) => p.id === id)?.name;
+    const label = this.labels.find((l) => l.name === name);
+    if (label) this.focusAt(label.x, label.y);
+  }
+
+  private focusTile(tile: number): void {
+    if (this.map) this.focusAt(tile % this.map.width, Math.floor(tile / this.map.width));
+  }
+
+  private focusAt(x: number, y: number): void {
+    const [w, h] = this.renderer.resize();
+    this.camera.centerOn(x, y, this.camera.zoom, w, h);
   }
 
   /** Déplacement au clavier, quelle que soit la disposition (ZQSD, WASD, flèches). */
@@ -684,13 +717,52 @@ export class GameScreen {
       (building ? ` · ${BUILDING_INFO[building.kind].name}${building.remaining > 0 ? ' (chantier)' : ''}` : '');
     const ownerName =
       owner === 0 ? 'Terres libres' : (this.snapshot?.players.find((p) => p.id === owner)?.name ?? '?');
-    const text = isPassable(map.terrain[tile]) ? `${terrain}${river}${extra} — ${ownerName}` : terrain;
-    this.hud.showTooltip(this.mouse[0], this.mouse[1], text);
+    if (!isPassable(map.terrain[tile])) {
+      this.hud.showTooltip(this.mouse[0], this.mouse[1], terrain);
+      return;
+    }
+    const lines = [`${ownerName} · ${terrain}${river}${extra}`];
+    const output = building && building.remaining === 0 ? this.buildingOutput(building.kind, building.owner) : '';
+    if (output) lines.push(output);
+    // Aperçu de l'attaque : ce que donnerait un clic ici avec l'envoi actuel.
+    let tone: 'good' | 'mid' | 'bad' | undefined;
+    const estimate = owner !== HUMAN_ID ? this.insight?.estimates.find((e) => e.target === owner) : undefined;
+    if (estimate && owner === 0) {
+      lines.push(`⚔ ${formatNumber(estimate.sent)} envoyés → ≈ ${formatNumber(estimate.tiles)} cases`);
+    } else if (estimate) {
+      const share = estimate.share_permille / 10;
+      tone = estimate.conquers_all || share >= 30 ? 'good' : share >= 8 ? 'mid' : 'bad';
+      const verdict = estimate.conquers_all
+        ? 'tout son territoire'
+        : `≈ ${formatNumber(estimate.tiles)} cases (${share < 1 ? '< 1' : Math.round(share)} % de ses terres)`;
+      lines.push(`⚔ ${formatNumber(estimate.power)} contre 🛡 ${formatNumber(estimate.defense)}`, `→ ${verdict}`);
+    }
+    this.hud.showTooltip(this.mouse[0], this.mouse[1], lines.join('\n'), tone);
+  }
+
+  /** Production d'un bâtiment posé, quand tous ses emplois sont pourvus. */
+  private buildingOutput(kind: BuildingKind, owner: number): string {
+    const i = BUILDINGS.indexOf(kind);
+    const def = this.map?.rules.buildings[i];
+    const job = this.map?.rules.buildings[i] ? BUILDING_JOB[kind] : undefined;
+    if (!def || !job) return def && def.housing > 0 ? `☺ +${formatNumber(def.housing)} places` : '';
+    // Les miens : bonus de l'Académie compris ; ceux des autres : rendement de base.
+    const mine = owner === HUMAN_ID ? this.insight?.gains[i] : undefined;
+    const perSecond = mine ? mine.output[job.key] : (def.jobs * def.job_yield_milli * 10) / 1000;
+    return `${job.icon} jusqu’à +${formatNumber(perSecond)}/s · ${def.jobs} emplois`;
   }
 }
 
-function homeForce(p: { soldiers: number[]; garrison: number }): number {
-  return p.soldiers.reduce((a, b) => a + b, 0) + p.garrison;
+/** Ressource produite par les bâtiments à emplois. */
+const BUILDING_JOB: Partial<Record<BuildingKind, { key: 'food' | 'wood' | 'stone' | 'iron'; icon: string }>> = {
+  farm: { key: 'food', icon: '◆' },
+  sawmill: { key: 'wood', icon: '▲' },
+  quarry: { key: 'stone', icon: '■' },
+  mine: { key: 'iron', icon: '⬣' },
+};
+
+function soldiersAt(p: { soldiers: number[] }): number {
+  return p.soldiers.reduce((a, b) => a + b, 0);
 }
 
 function rejectMessage(reason: RejectReason): string {

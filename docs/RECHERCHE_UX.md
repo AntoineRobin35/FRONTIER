@@ -330,3 +330,91 @@ Décisions (volontairement plus lent qu'OpenFront : « 500 ans en 50 min ») :
 Simulations (10 graines) : terres prises vers 9-10 min, première élimination vers
 9-22 min, parties finies entre 25 et plus de 66 min (forte variance entre IA). Mesures reproductibles :
 `cargo test --release -p frontier-engine measure_attack_pace -- --ignored --nocapture`.
+
+## 14. HUD et milieu de partie : conception (22/11/2026)
+
+### Le problème, vu en jouant
+Après ~13 min (plus de terres libres), le joueur ne sait plus quoi faire : il ignore
+s'il est plus fort que ses voisins, ce que rapportent ses bâtiments, ce que changent
+ses curseurs ; les attaques en cours (les siennes, celles qu'il subit, les bateaux)
+sont mal visibles. Les textes existants sont vagues et longs.
+
+### Principe directeur : montrer la conséquence, pas expliquer la règle
+Ce que font les bons jeux de gestion (Anno, Stellaris/Victoria, Northgard, Frostpunk) :
+le joueur comprend parce qu'il **voit l'effet de chaque choix avant et après**, avec
+des chiffres, des icônes et des couleurs. Pas de paragraphes, pas de tutoriel
+permanent : l'information apparaît **à l'endroit où l'on regarde, au moment où l'on
+décide**. Règles retenues :
+1. **Aperçu avant d'agir** : survoler un territoire = estimation de l'attaque ;
+   bouger un curseur = nouvelles valeurs en fantôme ; survoler un bâtiment à
+   construire = ce qu'il rapporte vraiment (bonus de l'Académie compris).
+2. **Comparer plutôt que décrire** : ta force contre la sienne, avec un verdict
+   coloré (favorable / serré / perdu d'avance).
+3. **Le vrai chiffre** : solde réel, détail au survol (bâtiments, terrain, mangé,
+   formation) ; jamais « + population maximale » sans le nombre.
+4. **Le gaspillage se voit** : réserve pleine, logement plein → chiffre orange.
+5. **Une indication seulement où il le faut** : la bande d'objectif reste, et en
+   milieu de partie elle devient une **opportunité** calculée (« Kethra est ta
+   voisine la plus faible ») plutôt qu'une consigne.
+
+### Ce qui change
+- **Moteur** (`insight.rs`, sans effet sur la partie) : issue d'un plan de population
+  (travailleurs, production, défense) pour chaque position du curseur ; estimation
+  d'une attaque (cases prises, part du territoire, percée) contre chaque cible ;
+  production des bâtiments séparée de celle du terrain ; bonus de l'Académie.
+- **Curseurs** : pendant qu'on règle Soldats ou Garnison, une ligne fantôme montre
+  ◆ ▲ et 🛡 avant → après.
+- **Survol d'un territoire** : petite carte « ⚔ ton envoi contre 🛡 sa défense →
+  ≈ N cases (X % de son territoire) », verdict coloré ; sur les terres libres, ≈ N cases.
+- **Étiquettes sur la carte** : 🛡 force de la garnison · ⚔ soldats à la maison
+  (les troupes parties ne sont plus affichées).
+- **Panneau des attaques** : ↗ tes attaques, ↘ celles qui te visent, ⛵ bateaux
+  (les tiens et ceux qui arrivent) ; clic = centrer la carte.
+- **Bâtiments** : info-bulle sur 3 lignes centrées (nom / effet chiffré / coût en
+  icônes) ; survol d'un bâtiment posé = sa production réelle.
+- **Classement** : couleur, nom, IA ou joueur, % des terres, troupes ; bouton pour
+  le masquer ; ⚙ pour ajouter des colonnes (ressources, bâtiments) ; taille réglable.
+- **Milieu de partie** : opportunités dans la bande d'objectif, gisements des
+  voisins visibles comme des cibles (survol = ce qu'ils rapportent).
+
+### Réalisé (22/11/2026)
+Tout ce qui précède est en place. Vérifié : 37 tests Rust (dont l'estimation d'attaque
+comparée à de vrais combats, à ±40 %), typage du client, essai dans le navigateur
+(aperçu des curseurs, info-bulles des bâtiments, classement réglable, panneau des
+attaques, estimation sur les terres libres). Pas encore vu en jouant : l'estimation
+contre un voisin et l'objectif « opportunité » de milieu de partie.
+
+## 15. Une société qui a de la mémoire (22/11/2026)
+
+Constat : la population était un jeu de vases communicants sans mémoire (on passe
+de 10 % à 60 % de soldats et retour sans conséquence durable), le fer ne servait
+pas à l'armée, et une conquête rapportait tout de suite (effet boule de neige).
+Cap du propriétaire : « 500 ans en 50 min », chaque choix pèse plus tard.
+
+Mécaniques ajoutées (chiffres dans `GameConfig`) :
+- **Expérience des métiers** (`experience_bonus_permille` 500, `experience_time`
+  3000) : les travailleurs restés en poste gagnent jusqu'à +50 % de rendement en
+  ~5 min. Les derniers arrivés partent les premiers (on ne perd l'expérience qu'en
+  vidant vraiment un métier). Réorganiser son économie a un coût durable.
+- **Équipement** (`equipment_iron_milli` 400, `equipment_bonus_permille` 500) :
+  chaque recrue formée avec 0,4 fer est armée ; une armée entièrement équipée est
+  50 % plus forte en attaque et en défense. Le fer devient la ressource militaire,
+  les mines deviennent des cibles du milieu de partie.
+- **Intégration des conquêtes** (`integration_ticks` 2400 = 4 min) : une case prise
+  à un joueur ne loge personne et n'offre pas d'emplois pendant 4 min. Le vaincu
+  perd tout de suite, le vainqueur gagne plus tard : frein à la boule de neige.
+- **Garnison** plafonnée à ×2,5 (au lieu de ×3) : elle bloquait les fins de partie.
+- **Bug corrigé** : la garnison ne s'entraînait jamais tant que la population
+  grandissait (arrondi à la baisse à chaque recrue).
+
+Interface : préréglages de société (Économie, Équilibre, Guerre, Tortue) ; pastilles
+🗡 équipement et ⏳ cases à intégrer ; expérience et délais (« épuisé dans 1:20 »)
+dans les info-bulles des ressources ; délai rouge à côté d'une ressource qui
+s'épuise en moins de 3 min ; l'info-bulle des curseurs ne cache plus l'aperçu.
+
+Simulations (10 graines) : terres prises vers 9-10 min, première élimination vers
+8-15 min, 9 parties sur 10 finies entre 33 et 65 min (les tirages très courts,
+vers 21-25 min, ont disparu).
+
+Écartés pour l'instant : entretien permanent de l'armée (les soldats mangent déjà
+1,5 fois plus), marché, saisons — à reconsidérer après des parties humaines.

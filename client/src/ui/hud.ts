@@ -11,8 +11,9 @@
 import {
   BUILDINGS,
   TECHS,
-  type AttackView,
   type BuildingKind,
+  type Insight,
+  type PlanPreview,
   type PlayerView,
   type PopulationPlan,
   type RulesConfig,
@@ -22,7 +23,7 @@ import {
 import { rgbCss, type Rgb } from '../render/palette';
 import type { Objective } from '../app/guide';
 import { escapeHtml, formatNumber, formatTime } from './format';
-import { BUILDING_INFO, JOB_NAMES, RESOURCES, TECH_INFO, UNIT_NAMES, canPay, costText, roman } from './labels';
+import { BUILDING_INFO, DEPOSIT_INFO, JOB_NAMES, RESOURCES, TECH_INFO, UNIT_NAMES, canPay, costIcons, costText, roman, signed } from './labels';
 
 export interface HudSeat {
   name: string;
@@ -50,7 +51,33 @@ export interface HudCallbacks {
   onResearch: (tech: TechId) => void;
   onSelectBuilding: (kind: BuildingKind | null) => void;
   onHelp: () => void;
+  /** Centrer la carte sur un joueur ou une case. */
+  onFocusPlayer: (id: number) => void;
+  onFocusTile: (tile: number) => void;
+  /** Propriétaire d'une case (pour reconnaître les bateaux qui arrivent). */
+  ownerOf: (tile: number) => number;
 }
+
+/** Colonnes facultatives du classement. */
+type LbColumn = 'garrison' | 'population' | 'resources' | 'buildings';
+const LB_COLUMNS: { key: LbColumn; icon: string; label: string }[] = [
+  { key: 'garrison', icon: '🛡', label: 'Garnison' },
+  { key: 'population', icon: '☺', label: 'Population' },
+  { key: 'resources', icon: '◆', label: 'Ressources' },
+  { key: 'buildings', icon: '⌂', label: 'Bâtiments' },
+];
+const LB_STORAGE = 'frontier.leaderboard.v1';
+
+/** Préréglages de société : [soldats ‰, garnison ‰]. */
+const PRESETS = {
+  economy: [100, 0],
+  balanced: [250, 0],
+  war: [500, 0],
+  turtle: [150, 250],
+} as const;
+
+/** Couleurs de la barre de population. */
+const POP_COLORS = { workers: '#c9b27a', soldiers: '#d9705f', away: '#8f4a40', garrison: '#6f8fd0' };
 
 /** Un conseil de l'aide : un titre court et une phrase. */
 export interface HelpTip {
@@ -74,13 +101,6 @@ const RESOURCE_JOB: Record<'food' | 'wood' | 'stone' | 'iron', { index: number; 
   wood: { index: 1, name: 'bûcherons' },
   stone: { index: 2, name: 'mineurs' },
   iron: { index: 3, name: 'forgerons' },
-};
-
-const RESOURCE_TIPS: Record<string, string> = {
-  food: 'Nourriture : nourrit ta population. Si elle manque, la population baisse. Un excédent la fait grandir.',
-  wood: 'Bois : sert à construire et à former les soldats.',
-  stone: 'Pierre : extraite par les mineurs (carrière). Sert aux bâtiments avancés.',
-  iron: 'Fer : produit par les forgerons (mine). Sert aux constructions avancées.',
 };
 
 export class Hud {
@@ -118,6 +138,17 @@ export class Hud {
   private lastRender = 0;
   private lastBuildKey = '';
   private pressing = false;
+  private insight: Insight | null = null;
+  /** Curseur dont on montre l'aperçu (survolé ou tenu). */
+  private previewing: 'soldiers' | 'garrison' | null = null;
+  private previewEl: HTMLElement;
+  private sentEl: HTMLElement;
+  /** Effectifs des attaques il y a ~1,5 s, pour savoir si elles fondent. */
+  private troopHistory = new Map<string, { at: number; troops: number }>();
+  private lbColumns = new Set<LbColumn>();
+  private lbCollapsed = false;
+  private lbOptions = false;
+  private tickMs = 100;
 
   constructor(seats: HudSeat[], private cb: HudCallbacks) {
     this.seats = seats;
@@ -128,21 +159,28 @@ export class Hud {
       <div class="leaderboard panel"></div>
       <div class="pop-panel panel">
         <div class="pop-stats"></div>
-        <div class="slider-row main-slider"
-          data-tip="Part de ta population qui devient soldat. Les autres travaillent et produisent. Former des soldats prend du temps et coûte de la nourriture et du bois.">
-          <label>Soldats</label>
+        <div class="slider-row main-slider" data-preview="soldiers">
+          <label data-tip="Part de ta population en soldats ; les autres travaillent.">Soldats</label>
           <input type="range" min="0" max="80" step="1" data-plan="soldiers" />
           <b data-value="soldiers"></b>
+        </div>
+        <div class="preview hidden"></div>
+        <div class="presets">
+          <button class="preset" data-preset="economy" data-tip="10 % de soldats : tout pour l'économie.">Économie</button>
+          <button class="preset" data-preset="balanced" data-tip="25 % de soldats.">Équilibre</button>
+          <button class="preset" data-preset="war" data-tip="50 % de soldats : prêt à frapper, l'économie ralentit.">Guerre</button>
+          <button class="preset" data-preset="turtle" data-tip="15 % de soldats et 25 % de garnison : très dur à attaquer.">Tortue</button>
         </div>
         <button class="btn btn-small toggle-details"
           data-tip="Régler toi-même les métiers, la composition de l'armée et la garnison.">⚙ Réglages détaillés</button>
         <div class="details hidden"></div>
         <div class="slider-row ratio"
-          data-tip="Part de tes soldats envoyés quand tu cliques pour attaquer ou t'étendre (touches A / E).">
+          data-tip="Part de tes soldats envoyés quand tu cliques pour attaquer ou t'étendre (touches A / E). Survole un territoire pour voir ce que donnerait l'attaque.">
           <label>Envoi</label>
           <input type="range" min="5" max="100" step="5" value="50" />
           <b>50%</b>
         </div>
+        <div class="sent"></div>
         <div class="attacks"></div>
       </div>
       <div class="objective panel hidden"></div>
@@ -187,6 +225,38 @@ export class Hud {
     this.menuEl = this.el.querySelector('.build-menu')!;
     this.ratioInput = this.el.querySelector('.ratio input')!;
     this.ratioLabel = this.el.querySelector('.ratio b')!;
+    this.previewEl = this.el.querySelector('.preview')!;
+    this.sentEl = this.el.querySelector('.sent')!;
+    try {
+      const saved = JSON.parse(localStorage.getItem(LB_STORAGE) ?? '{}');
+      this.lbColumns = new Set(saved.columns ?? []);
+      this.lbCollapsed = !!saved.collapsed;
+    } catch {
+      // préférences indisponibles : valeurs par défaut
+    }
+    this.leaderboard.addEventListener('pointerdown', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-lb-collapse]')) {
+        this.lbCollapsed = !this.lbCollapsed;
+        this.saveLeaderboard();
+      } else if (target.closest('[data-lb-options]')) {
+        this.lbOptions = !this.lbOptions;
+      } else {
+        const row = target.closest<HTMLElement>('[data-focus]');
+        if (row) this.cb.onFocusPlayer(Number(row.dataset.focus));
+        return;
+      }
+      this.refresh();
+    });
+    this.leaderboard.addEventListener('change', (e) => {
+      const input = e.target as HTMLInputElement;
+      const col = input.dataset.col as LbColumn | undefined;
+      if (!col) return;
+      if (input.checked) this.lbColumns.add(col);
+      else this.lbColumns.delete(col);
+      this.saveLeaderboard();
+      this.refresh();
+    });
 
     this.ratioInput.addEventListener('input', () => {
       const permille = Number(this.ratioInput.value) * 10;
@@ -194,8 +264,30 @@ export class Hud {
       this.setRatio(permille);
     });
     this.attacksEl.addEventListener('pointerdown', (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-cancel]');
-      if (btn) this.cb.onCancelAttack(Number(btn.dataset.cancel));
+      const target = e.target as HTMLElement;
+      const btn = target.closest<HTMLElement>('[data-cancel]');
+      if (btn) {
+        this.cb.onCancelAttack(Number(btn.dataset.cancel));
+        return;
+      }
+      const row = target.closest<HTMLElement>('[data-focus-player], [data-focus-tile]');
+      if (row?.dataset.focusPlayer) this.cb.onFocusPlayer(Number(row.dataset.focusPlayer));
+      else if (row?.dataset.focusTile) this.cb.onFocusTile(Number(row.dataset.focusTile));
+    });
+    // Préréglages de société : un clic règle soldats et garnison.
+    this.el.querySelector('.presets')!.addEventListener('pointerdown', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-preset]');
+      if (!btn || !this.plan) return;
+      const [soldiers, garrison] = PRESETS[btn.dataset.preset as keyof typeof PRESETS];
+      this.plan = { ...this.plan, soldiers_permille: soldiers, garrison_permille: garrison };
+      this.editedAt = performance.now();
+      this.cb.onPlan(structuredClone(this.plan));
+      this.refresh();
+    });
+    // Aperçu des curseurs Soldats et Garnison : au survol et pendant le réglage.
+    watchPreview(this.el, (kind) => {
+      this.previewing = kind;
+      this.renderPreview();
     });
     this.el.querySelector('.toggle-details')!.addEventListener('click', () => {
       this.detailed = !this.detailed;
@@ -266,6 +358,7 @@ export class Hud {
     const text = target.dataset.tip;
     if (!text) return;
     this.tipEl.textContent = text;
+    this.tipEl.classList.toggle('center', target.dataset.tipCenter !== undefined);
     this.tipEl.classList.remove('hidden');
     const r = target.getBoundingClientRect();
     const tip = this.tipEl.getBoundingClientRect();
@@ -278,10 +371,31 @@ export class Hud {
 
   // ------------------------------------------------------------------ mise à jour
 
-  update(snap: Snapshot, meId: number, tickMs: number): void {
+  /** Aperçus du moteur (curseurs, attaques, bâtiments). */
+  setInsight(insight: Insight | null): void {
+    this.insight = insight;
+    if (this.previewing) this.renderPreview();
+  }
+
+  /** Redessine tout de suite (après un clic dans le HUD). */
+  private refresh(): void {
+    const last = this.lastSnap;
+    if (last) this.update(last.snap, last.meId, this.tickMs, true);
+  }
+
+  private saveLeaderboard(): void {
+    try {
+      localStorage.setItem(LB_STORAGE, JSON.stringify({ columns: [...this.lbColumns], collapsed: this.lbCollapsed }));
+    } catch {
+      // pas grave
+    }
+  }
+
+  update(snap: Snapshot, meId: number, tickMs: number, force = false): void {
     const now = performance.now();
-    if (now - this.lastRender < RENDER_INTERVAL_MS) return;
+    if (!force && now - this.lastRender < RENDER_INTERVAL_MS) return;
     this.lastRender = now;
+    this.tickMs = tickMs;
     const me = snap.players.find((p) => p.id === meId);
     this.lastSnap = { snap, meId };
     this.renderTop(snap, me, tickMs);
@@ -320,17 +434,35 @@ export class Hud {
               const sign = rate >= 0 ? '+' : '';
               const job = RESOURCE_JOB[r.key];
               const workers = me.jobs[job.index];
-              const parts = [`produit +${formatNumber(me.production[r.key])}/s (${formatNumber(workers)} ${job.name})`];
-              if (eaten > 0) parts.push(`mangé −${formatNumber(eaten)}/s`);
-              if (training > 0) parts.push(`formation des soldats −${formatNumber(training)}/s`);
-              const why =
-                workers === 0 && r.key === 'wood' && me.jobs[0] > 0
-                  ? ' Aucun bûcheron : tous tes travailleurs cueillent pour nourrir la population (un soldat mange 1,5 fois plus qu’un travailleur).'
-                  : '';
-              const tip = `${RESOURCE_TIPS[r.key]} Solde ${sign}${formatNumber(rate)}/s : ${parts.join(', ')}.${why} Stock ${formatNumber(amount)} sur ${formatNumber(me.storage)} max${full ? ' : réserve pleine, la production se perd' : ''}.`;
+              const fromBuildings = this.insight?.from_buildings[r.key] ?? 0;
+              const fromLand = this.insight ? this.insight.from_land[r.key] : me.production[r.key];
+              const sources: string[] = [];
+              if (fromBuildings > 0) sources.push(`bâtiments +${formatNumber(fromBuildings)}`);
+              if (fromLand > 0 || fromBuildings === 0) sources.push(`terrain +${formatNumber(fromLand)}`);
+              const lines = [`${r.name} : ${signed(rate)}/s`, `${sources.join(' · ')}  (${formatNumber(workers)} ${job.name})`];
+              const exp = me.experience[job.index] ?? 0;
+              if (workers > 0 && exp > 0) {
+                const bonus = Math.round(((this.rules?.experience_bonus_permille ?? 500) * exp) / 10000);
+                lines.push(`expérience ${Math.round(exp / 10)} % des ${job.name} → +${bonus} %`);
+              }
+              if (eaten > 0) lines.push(`mangé −${formatNumber(eaten)}`);
+              if (training > 0) lines.push(`formation des soldats −${formatNumber(training)}`);
+              if (workers === 0 && r.key === 'wood' && me.jobs[0] > 0) {
+                lines.push('Aucun bûcheron : tous tes travailleurs nourrissent la population.');
+              }
+              if (rate < 0) lines.push(`épuisé dans ${formatTime((amount / -rate) * 1000)}`);
+              else if (rate > 0 && !full) lines.push(`plein dans ${formatTime(((me.storage - amount) / rate) * 1000)}`);
+              lines.push(
+                full
+                  ? `Réserve pleine (${formatNumber(me.storage)}) : la production se perd.`
+                  : `Réserve ${formatNumber(amount)} / ${formatNumber(me.storage)}`,
+              );
+              const tip = lines.join('\n');
               return `<div class="res ${full ? 'full' : ''}" data-tip="${escapeHtml(tip)}">
                 <span class="res-icon" style="color:${r.color}">${r.icon}</span>
-                <b>${formatNumber(amount)}</b><small class="${rate < 0 ? 'neg' : ''}">${sign}${formatNumber(rate)}/s</small>
+                <b>${formatNumber(amount)}</b><small class="${rate < 0 ? 'neg' : ''}">${sign}${formatNumber(rate)}/s</small>${
+                  rate < 0 && amount / -rate < 180 ? `<small class="neg eta">⏳ ${formatTime((amount / -rate) * 1000)}</small>` : ''
+                }
               </div>`;
             })
             .join('')
@@ -338,7 +470,11 @@ export class Hud {
 
     const pop =
       me && snap.phase.type !== 'spawn'
-        ? `<div class="res" data-tip="Population / place maximale. Elle grandit si la nourriture est en excédent. Plus de territoire et de villes = plus de place.">
+        ? `<div class="res ${me.population >= me.housing * 0.98 ? 'full' : ''}" data-tip="${escapeHtml(
+            me.population >= me.housing * 0.98
+              ? `Population ${formatNumber(me.population)} / ${formatNumber(me.housing)}\nLogement plein : la population ne grandit plus.\nPlus de place : villes, territoire.`
+              : `Population ${formatNumber(me.population)} / ${formatNumber(me.housing)}\nElle grandit tant que la nourriture est en excédent.`,
+          )}">
             <span class="res-icon">☺</span><b>${formatNumber(me.population)}</b><small>/ ${formatNumber(me.housing)}</small></div>`
         : '';
 
@@ -357,55 +493,123 @@ export class Hud {
 
   private renderLeaderboard(snap: Snapshot, meId: number): void {
     const land = Math.max(1, snap.land_tiles);
+    const cols = LB_COLUMNS.filter((c) => this.lbColumns.has(c.key));
+    const head = `
+      <div class="lb-head">
+        <h2 data-tip="Contrôle 80 % des terres, ou sois le dernier, pour gagner.">CIVILISATIONS</h2>
+        <button class="icon-btn ${this.lbOptions ? 'on' : ''}" data-lb-options data-tip="Choisir les colonnes">⚙</button>
+        <button class="icon-btn" data-lb-collapse data-tip="${this.lbCollapsed ? 'Afficher' : 'Masquer'} le classement">${this.lbCollapsed ? '▸' : '▾'}</button>
+      </div>`;
+    this.leaderboard.classList.toggle('collapsed', this.lbCollapsed);
+    if (this.lbCollapsed) {
+      setHtml(this.leaderboard, head);
+      return;
+    }
+    const options = this.lbOptions
+      ? `<div class="lb-options">${LB_COLUMNS.map(
+          (c) =>
+            `<label class="check"><input type="checkbox" data-col="${c.key}" ${this.lbColumns.has(c.key) ? 'checked' : ''}/> ${c.icon} ${c.label}</label>`,
+        ).join('')}</div>`
+      : '';
     const players = [...snap.players].sort((a, b) => Number(b.alive) - Number(a.alive) || b.tiles - a.tiles);
-    setHtml(
-      this.leaderboard,
-      `<h2 data-tip="Toutes les civilisations, de la plus grande à la plus petite. Contrôle 80 % des terres pour gagner.">CIVILISATIONS</h2>` +
-      players
-        .map((p) => {
-          const seat = this.seats[p.id - 1];
-          const sub = seat?.agentName ? `IA ${escapeHtml(seat.agentName)}` : 'Toi';
-          const home = homeForce(p);
-          return `
-          <div class="lb-row ${p.alive ? '' : 'dead'} ${p.id === meId ? 'mine' : ''}">
-            <span class="swatch" style="background:${rgbCss(seat?.color ?? [128, 128, 128])}"></span>
-            <span class="name">${escapeHtml(p.name)}<br><span class="sub">${sub}</span></span>
-            <span class="num" data-tip="Part des terres du monde qu'elle contrôle.">${((p.tiles * 100) / land).toFixed(1)}%</span>
-            <span class="num" data-tip="Soldats qui défendent son territoire (soldats à la maison + garnison).">⚔ ${formatNumber(home)}</span>
-          </div>`;
-        })
-        .join(''),
-    );
+    const header = `<tr><th></th><th></th><th data-tip="Part des terres du monde.">%</th><th data-tip="Soldats à la maison.">⚔</th>${cols
+      .map((c) => `<th data-tip="${c.label}">${c.icon}</th>`)
+      .join('')}</tr>`;
+    const rows = players
+      .map((p) => {
+        const seat = this.seats[p.id - 1];
+        const kind = seat?.agentName ? 'IA' : p.id === meId ? 'Toi' : 'Joueur';
+        const extra = cols
+          .map((c) => {
+            switch (c.key) {
+              case 'garrison':
+                return `<td class="num">${formatNumber(p.garrison_power)}</td>`;
+              case 'population':
+                return `<td class="num">${formatNumber(p.population)}</td>`;
+              case 'resources':
+                return `<td class="num small">${RESOURCES.filter((r) => p.resources[r.key] > 0)
+                  .map((r) => `<span style="color:${r.color}">${r.icon}</span>${formatNumber(p.resources[r.key])}`)
+                  .join(' ')}</td>`;
+              case 'buildings':
+                return `<td class="num">${p.buildings.reduce((a, b) => a + b, 0)}</td>`;
+            }
+          })
+          .join('');
+        return `
+          <tr class="${p.alive ? '' : 'dead'} ${p.id === meId ? 'mine' : ''}" data-focus="${p.id}">
+            <td><span class="swatch" style="background:${rgbCss(seat?.color ?? [128, 128, 128])}"></span></td>
+            <td class="name">${escapeHtml(p.name)} <span class="sub">${kind}</span></td>
+            <td class="num">${((p.tiles * 100) / land).toFixed(1)}</td>
+            <td class="num">${formatNumber(soldiersOf(p))}</td>${extra}
+          </tr>`;
+      })
+      .join('');
+    setHtml(this.leaderboard, `${head}${options}<table class="lb-table">${header}${rows}</table>`);
   }
 
   private renderPopulation(me: PlayerView): void {
-    const soldiers = me.soldiers.reduce((a, b) => a + b, 0);
-    const rows: string[] = [
-      row('Travailleurs', formatNumber(me.workers), 'Ils produisent nourriture, bois et le reste. Plus ils sont nombreux, plus ton économie tourne.'),
-      row('Soldats à la maison', formatNumber(soldiers), 'Ils défendent ton territoire et partent quand tu attaques.'),
+    const soldiers = soldiersOf(me);
+    // Barre : chaque couleur est une part de la population ; le vide, la place
+    // encore libre (logement).
+    const total = Math.max(1, me.housing, me.population);
+    const seg = (n: number, cls: string, color: string, tip: string) =>
+      n > 0 ? `<span class="${cls}" style="width:${(n * 100) / total}%;background:${color}" data-tip="${escapeHtml(tip)}"></span>` : '';
+    const free = Math.max(0, me.housing - me.population);
+    const bar =
+      '<div class="pop-bar">' +
+      seg(me.workers, '', POP_COLORS.workers, `Travailleurs : ${formatNumber(me.workers)}`) +
+      seg(soldiers, '', POP_COLORS.soldiers, `Soldats à la maison : ${formatNumber(soldiers)}`) +
+      seg(me.away, '', POP_COLORS.away, `En campagne : ${formatNumber(me.away)}`) +
+      seg(me.garrison, '', POP_COLORS.garrison, `Garnison : ${formatNumber(me.garrison)}`) +
+      seg(free, 'free', 'transparent', `Place libre : ${formatNumber(free)}`) +
+      '</div>';
+    const chip = (color: string, icon: string, value: string, tip: string) =>
+      `<span class="chip" data-tip="${escapeHtml(tip)}"><i style="background:${color}"></i>${icon} ${value}</span>`;
+    const chips = [
+      chip(POP_COLORS.workers, '⚒', formatNumber(me.workers), 'Travailleurs : ils produisent tout.'),
+      chip(POP_COLORS.soldiers, '⚔', formatNumber(soldiers), 'Soldats à la maison : ils défendent et partent quand tu attaques.'),
     ];
-    if (me.away > 0) {
-      rows.push(row('En campagne', formatNumber(me.away), 'Soldats partis en attaque ou en bateau. Ils ne défendent pas ta maison.'));
-    }
-    if (me.garrison > 0 || me.plan.garrison_permille > 0) {
-      rows.push(
-        row(
-          'Garnison',
-          `${formatNumber(me.garrison)} · ×${(me.garrison_training / 1000).toFixed(1)}`,
-          "Défenseurs : ils n'attaquent jamais, mais s'entraînent avec le temps (×1 → ×3) et défendent de mieux en mieux.",
+    if (me.away > 0) chips.push(chip(POP_COLORS.away, '↗', formatNumber(me.away), 'En campagne : partis attaquer, ils ne défendent pas.'));
+    if (soldiers + me.away > 0 && (me.equipment > 0 || me.resources.iron > 0 || me.production.iron > 0)) {
+      const bonus = Math.round(((this.rules?.equipment_bonus_permille ?? 500) * me.equipment) / 10000);
+      chips.push(
+        chip(
+          '#c98a5a',
+          '🗡',
+          `${Math.round(me.equipment / 10)} %`,
+          `Armée équipée de fer : ${Math.round(me.equipment / 10)} % (+${bonus} % de force).\nChaque recrue est armée tant qu'il te reste du fer.`,
         ),
       );
     }
-    rows.push(
-      row(
-        'Force de défense',
-        formatNumber(me.defense),
-        'Puissance totale qui protège ton territoire. Plus elle est haute, plus les attaques ennemies ralentissent et coûtent cher.',
-      ),
+    if (me.unsettled > 0) {
+      const minutes = Math.round((this.rules?.integration_ticks ?? 2400) / 600);
+      chips.push(
+        chip(
+          '#8a97a4',
+          '⏳',
+          formatNumber(me.unsettled),
+          `Cases conquises en cours d'intégration.\nPendant ~${minutes} min, elles ne logent personne et n'offrent pas d'emplois.`,
+        ),
+      );
+    }
+    if (me.garrison > 0) {
+      chips.push(
+        chip(
+          POP_COLORS.garrison,
+          '🛡',
+          `${formatNumber(me.garrison)} ×${(me.garrison_training / 1000).toFixed(1)}`,
+          'Garnison : ne quitte jamais ton territoire et se renforce avec le temps (×1 → ×3).',
+        ),
+      );
+    }
+    setHtml(
+      this.popStats,
+      `<h2><span class="swatch" style="display:inline-block;background:${rgbCss(this.seats[me.id - 1].color)}"></span>
+        ${escapeHtml(me.name)}<span class="defense" data-tip="Ta défense : soldats à la maison + garnison entraînée. Plus elle est haute, plus les attaques contre toi ralentissent et fondent.">🛡 ${formatNumber(me.defense)}</span></h2>
+      ${bar}<div class="chips">${chips.join('')}</div>`,
     );
-    setHtml(this.popStats, `
-      <h2><span class="swatch" style="display:inline-block;background:${rgbCss(this.seats[me.id - 1].color)}"></span>
-        ${escapeHtml(me.name)}</h2>${rows.join('')}`);
+    const sent = Math.round((soldiers * Number(this.ratioInput.value)) / 100);
+    setHtml(this.sentEl, soldiers > 0 ? `⚔ ${formatNumber(sent)} soldats par clic` : '');
 
     const editing = performance.now() - this.editedAt < EDIT_GRACE_MS;
     if (!editing) this.plan = structuredClone(me.plan);
@@ -460,8 +664,8 @@ export class Hud {
       ${units}
       ${lockedUnits ? `<div class="hint">${lockedUnits === 2 ? 'Archers et cavaliers' : "D'autres unités"} se débloquent plus tard (archerie, écurie).</div>` : ''}
       <div class="section-title">Garnison</div>
-      <div class="slider-row" data-tip="Part de ta population en garnison : des défenseurs qui ne quittent jamais ton territoire et deviennent plus forts avec le temps. Stratégie défensive.">
-        <label>Garnison</label>
+      <div class="slider-row" data-preview="garrison">
+        <label data-tip="Part de ta population en garnison : des défenseurs qui ne quittent jamais ton territoire et deviennent plus forts avec le temps.">Garnison</label>
         <input type="range" min="0" max="60" step="1" value="${Math.round(plan.garrison_permille / 10)}" data-plan="garrison" />
         <b>${Math.round(plan.garrison_permille / 10)}%</b>
       </div>`);
@@ -490,6 +694,7 @@ export class Hud {
       plan.garrison_permille = 1000 - plan.soldiers_permille;
     }
     this.editedAt = performance.now();
+    if (this.previewing) this.renderPreview();
     this.el.querySelector('[data-value="soldiers"]')!.textContent = `${Math.round(plan.soldiers_permille / 10)}%`;
     const value = input.closest('.slider-row')?.querySelector('b');
     if (input.dataset.plan === 'garrison' && value) value.textContent = `${Math.round(plan.garrison_permille / 10)}%`;
@@ -502,26 +707,93 @@ export class Hud {
     }
   }
 
+  /** Attaques en cours : les miennes, celles qui me visent, les bateaux. */
   private renderAttacks(me: PlayerView, snap: Snapshot): void {
-    const mine = snap.attacks.filter((a) => a.attacker === me.id);
-    setHtml(
-      this.attacksEl,
-      mine.length ? `<div class="section-title">Attaques en cours</div>${mine.map((a) => this.attackRow(a, snap)).join('')}` : '',
-    );
+    const now = performance.now();
+    const name = (id: number) => (id === 0 ? 'Terres libres' : (snap.players.find((p) => p.id === id)?.name ?? '?'));
+    const swatch = (id: number) =>
+      id === 0
+        ? '<span class="swatch neutral"></span>'
+        : `<span class="swatch" style="background:${rgbCss(this.seats[id - 1]?.color ?? [128, 128, 128])}"></span>`;
+    // Flèche : l'attaque fond-elle ? (comparaison avec il y a ~1,5 s)
+    const trend = (key: string, troops: number) => {
+      const past = this.troopHistory.get(key);
+      if (!past || now - past.at > 1500) this.troopHistory.set(key, { at: now, troops });
+      if (!past || past.troops <= 0) return '';
+      const drop = (past.troops - troops) / past.troops;
+      if (drop > 0.08) return '<span class="trend bad" data-tip="Fond vite">▼▼</span>';
+      return drop > 0.01 ? '<span class="trend" data-tip="Perd des soldats">▼</span>' : '';
+    };
+    const rows: string[] = [];
+    for (const a of snap.attacks.filter((a) => a.attacker === me.id)) {
+      const tip = a.target === 0 ? 'Rappeler : les soldats rentrent.' : 'Retraite : les soldats rentrent, mais 25 % sont perdus.';
+      rows.push(`
+        <div class="attack-row" ${a.target ? `data-focus-player="${a.target}"` : ''}>
+          <span class="dir out" data-tip="Ton attaque">↗</span>${swatch(a.target)}<span class="grow">${escapeHtml(name(a.target))}</span>
+          ${trend(`a${a.id}`, a.troops)}<span class="troops" data-tip="Soldats encore engagés">⚔ ${formatNumber(a.troops)}</span>
+          <button class="icon-btn" data-cancel="${a.id}" data-tip="${tip}">✕</button>
+        </div>`);
+    }
+    for (const a of snap.attacks.filter((a) => a.target === me.id)) {
+      rows.push(`
+        <div class="attack-row incoming" data-focus-player="${a.attacker}">
+          <span class="dir in" data-tip="Attaque contre toi">↘</span>${swatch(a.attacker)}<span class="grow">${escapeHtml(name(a.attacker))}</span>
+          ${trend(`a${a.id}`, a.troops)}<span class="troops" data-tip="Soldats ennemis engagés">⚔ ${formatNumber(a.troops)}</span>
+        </div>`);
+    }
+    for (const b of snap.boats) {
+      const towards = this.cb.ownerOf(b.destination);
+      if (b.owner === me.id) {
+        rows.push(`
+          <div class="attack-row" data-focus-tile="${b.tile}">
+            <span class="dir out" data-tip="Ton bateau en mer">⛵</span>${swatch(towards)}<span class="grow">${escapeHtml(name(towards))}</span>
+            <span class="troops">⚔ ${formatNumber(b.troops)}</span>
+          </div>`);
+      } else if (towards === me.id) {
+        rows.push(`
+          <div class="attack-row incoming" data-focus-tile="${b.tile}">
+            <span class="dir in" data-tip="Bateau ennemi en route vers toi">⛵</span>${swatch(b.owner)}<span class="grow">${escapeHtml(name(b.owner))}</span>
+            <span class="troops">⚔ ${formatNumber(b.troops)}</span>
+          </div>`);
+      }
+    }
+    setHtml(this.attacksEl, rows.length ? `<div class="section-title">Attaques</div>${rows.join('')}` : '');
   }
 
-  private attackRow(a: AttackView, snap: Snapshot): string {
-    const target = a.target === 0 ? 'Terres libres' : (snap.players.find((p) => p.id === a.target)?.name ?? '?');
-    const tip =
-      a.target === 0
-        ? 'Rappeler : les soldats restants rentrent à la maison.'
-        : 'Battre en retraite : les soldats rentrent, mais tu en perds 25 %.';
-    return `
-      <div class="attack-row">
-        <span class="grow">→ ${escapeHtml(target)}</span>
-        <span data-tip="Soldats encore engagés dans cette attaque.">${formatNumber(a.troops)}</span>
-        <button class="btn btn-small" data-cancel="${a.id}" data-tip="${tip}">Rappeler</button>
-      </div>`;
+  /** Ligne fantôme sous le curseur réglé : valeurs actuelles → après réglage. */
+  private renderPreview(): void {
+    const kind = this.previewing;
+    const insight = this.insight;
+    const last = this.lastSnap;
+    const me = last?.snap.players.find((p) => p.id === last.meId);
+    if (!kind || !insight || !me || !this.plan) {
+      this.previewEl.classList.add('hidden');
+      return;
+    }
+    const list = kind === 'soldiers' ? insight.soldiers : insight.garrison;
+    const nearest = (permille: number): PlanPreview | undefined =>
+      list.reduce<PlanPreview | undefined>(
+        (best, p) => (!best || Math.abs(p.permille - permille) < Math.abs(best.permille - permille) ? p : best),
+        undefined,
+      );
+    const a = nearest(kind === 'soldiers' ? me.plan.soldiers_permille : me.plan.garrison_permille);
+    const b = nearest(kind === 'soldiers' ? this.plan.soldiers_permille : this.plan.garrison_permille);
+    if (!a || !b) {
+      this.previewEl.classList.add('hidden');
+      return;
+    }
+    const item = (icon: string, before: number, after: number, fmt: (n: number) => string) => {
+      const tone = after === before ? '' : after > before ? 'up' : 'down';
+      return `<span class="pv ${tone}">${icon} ${fmt(before)}${after !== before ? ` → ${fmt(after)}` : ''}</span>`;
+    };
+    const parts = [item('⚒', a.workers, b.workers, formatNumber)];
+    for (const res of RESOURCES) {
+      if (res.key !== 'food' && res.key !== 'wood' && me.production[res.key] <= 0 && me.resources[res.key] <= 0) continue;
+      parts.push(item(`<span style="color:${res.color}">${res.icon}</span>`, a.net[res.key], b.net[res.key], (n) => `${signed(n)}/s`));
+    }
+    parts.push(item('🛡', a.defense, b.defense, formatNumber));
+    this.previewEl.innerHTML = parts.join('');
+    this.previewEl.classList.remove('hidden');
   }
 
   private renderBuildBar(me: PlayerView): void {
@@ -537,28 +809,55 @@ export class Hud {
       return true;
     });
     const key =
-      available.map(({ kind, i }) => `${kind}:${canPay(me.resources, me.build_costs[i])}:${me.buildings[i]}:${costText(me.build_costs[i])}`).join('|') +
-      this.selected;
+      available
+        .map(({ kind, i }) => `${kind}:${canPay(me.resources, me.build_costs[i])}:${me.buildings[i]}:${costIcons(me.build_costs[i])}:${this.buildingEffect(kind, i, me)}`)
+        .join('|') + this.selected;
     if (key === this.lastBuildKey) return;
     this.lastBuildKey = key;
     this.buildBar.innerHTML = available
       .map(({ kind, i }) => {
         const info = BUILDING_INFO[kind];
-        const def = this.rules?.buildings[i];
         const cost = me.build_costs[i];
         const affordable = canPay(me.resources, cost);
-        const where = def && def.deposit !== 'none' ? ' À placer sur un gisement.' : '';
-        const time = def ? ` Chantier : ${Math.round(def.build_ticks / 10)} s.` : '';
-        const tip = `${info.name} — ${info.effect}${where}${time} Coût : ${costText(cost)}. Touche ${info.key}.`;
+        // Info-bulle sur 3 lignes : nom, ce qu'il apporte (chiffré), coût.
+        const tip = [`${info.name} (${info.key})`, this.buildingEffect(kind, i, me), costIcons(cost) || 'gratuit'].join('\n');
         return `
         <button class="build-btn ${this.selected === kind ? 'active' : ''} ${affordable ? '' : 'poor'}"
-          data-build="${kind}" data-tip="${escapeHtml(tip)}">
+          data-build="${kind}" data-tip="${escapeHtml(tip)}" data-tip-center>
           <span class="glyph">${info.glyph}</span>
           <span class="bname">${info.name}${me.buildings[i] ? ` <small>×${me.buildings[i]}</small>` : ''}</span>
-          <span class="bcost">${escapeHtml(costText(cost)) || 'gratuit'}</span>
+          <span class="bcost">${escapeHtml(costIcons(cost)) || 'gratuit'}</span>
         </button>`;
       })
       .join('');
+  }
+
+  /** Ce qu'apporte un bâtiment de plus, en une ligne chiffrée. */
+  private buildingEffect(kind: BuildingKind, i: number, me: PlayerView): string {
+    const gain = this.insight?.gains[i];
+    const def = this.rules?.buildings[i];
+    const where = def && def.deposit !== 'none' ? ` · sur ${DEPOSIT_INFO[def.deposit]?.name.toLowerCase() ?? 'gisement'}` : '';
+    const produced = gain ? RESOURCES.find((res) => gain.output[res.key] > 0) : undefined;
+    if (gain && produced) {
+      const unlocks = this.rules?.job_requires.includes(kind) && me.buildings[i] === 0 ? ` · débloque : ${produced.name.toLowerCase()}` : '';
+      const arms = kind === 'mine' ? ' · arme tes soldats' : '';
+      return `${produced.icon} +${formatNumber(gain.output[produced.key])}/s · ${gain.jobs} emplois${where}${unlocks}${arms}`;
+    }
+    if (gain && gain.housing > 0) return `☺ +${formatNumber(gain.housing)} places`;
+    switch (kind) {
+      case 'barracks':
+        return '⚔ soldats formés plus vite';
+      case 'archery':
+        return 'débloque les archers (défense ×1,4)';
+      case 'stable':
+        return 'débloque les cavaliers (attaque ×1,3)';
+      case 'fort':
+        return `🛡 ×${((this.insight?.fort_defense_permille ?? 3000) / 1000).toFixed(1)} autour (rayon ${this.rules?.fort_radius ?? 9})`;
+      case 'academy':
+        return '✦ recherches : économie et armée';
+      default:
+        return BUILDING_INFO[kind].effect;
+    }
   }
 
   // ------------------------------------------------------------------ Académie
@@ -765,12 +1064,17 @@ export class Hud {
     if (text && this.banner.textContent !== text) this.banner.textContent = text;
   }
 
-  showTooltip(x: number, y: number, text: string | null): void {
+  showTooltip(x: number, y: number, text: string | null, tone?: 'good' | 'mid' | 'bad'): void {
     this.tooltipEl.classList.toggle('hidden', !text);
     if (!text) return;
     this.tooltipEl.textContent = text;
-    this.tooltipEl.style.left = `${x}px`;
-    this.tooltipEl.style.top = `${y}px`;
+    this.tooltipEl.dataset.tone = tone ?? '';
+    // À côté du curseur, sans jamais sortir de l'écran.
+    const box = this.tooltipEl.getBoundingClientRect();
+    const left = x + 14 + box.width > window.innerWidth - 8 ? x - box.width - 14 : x + 14;
+    const top = y + 14 + box.height > window.innerHeight - 8 ? y - box.height - 14 : y + 14;
+    this.tooltipEl.style.left = `${Math.max(8, left)}px`;
+    this.tooltipEl.style.top = `${Math.max(8, top)}px`;
   }
 
   showMenu(x: number, y: number, title: string, options: MenuOption[]): void {
@@ -823,14 +1127,26 @@ export class Hud {
   }
 }
 
-/** Une ligne « libellé : valeur » avec son info-bulle. */
-function row(label: string, value: string, tip: string): string {
-  return `<div class="stat" data-tip="${escapeHtml(tip)}"><span>${label}</span><b>${value}</b></div>`;
+/** Soldats à la maison (tous types). */
+function soldiersOf(p: { soldiers: number[] }): number {
+  return p.soldiers.reduce((a, b) => a + b, 0);
 }
 
-/** Soldats qui défendent réellement le territoire : à la maison + garnison. */
-export function homeForce(p: { soldiers: number[]; garrison: number }): number {
-  return p.soldiers.reduce((a, b) => a + b, 0) + p.garrison;
+/** Suit le survol et le réglage des curseurs qui ont un aperçu (`data-preview`). */
+function watchPreview(root: HTMLElement, show: (kind: 'soldiers' | 'garrison' | null) => void): void {
+  let held: 'soldiers' | 'garrison' | null = null;
+  const kindOf = (el: EventTarget | null) =>
+    ((el as HTMLElement | null)?.closest<HTMLElement>('[data-preview]')?.dataset.preview ?? null) as 'soldiers' | 'garrison' | null;
+  root.addEventListener('pointerover', (e) => {
+    if (!held) show(kindOf(e.target));
+  });
+  root.addEventListener('pointerdown', (e) => {
+    held = kindOf(e.target);
+    if (held) show(held);
+  });
+  window.addEventListener('pointerup', () => {
+    held = null;
+  });
 }
 
 /** Remplace le contenu d'un élément seulement s'il a changé (évite de perdre

@@ -130,6 +130,19 @@ pub struct GameConfig {
     /// de (max − actuel) / constante à chaque tour.
     pub garrison_training_max: i64,
     pub garrison_training_time: i64,
+    /// Expérience des métiers : les travailleurs restés en poste deviennent
+    /// plus productifs, jusqu'à +bonus ‰, en environ `experience_time` tours.
+    /// Les derniers arrivés partent les premiers : l'expérience se garde tant
+    /// qu'on ne vide pas un métier.
+    pub experience_bonus_permille: i64,
+    pub experience_time: i64,
+    /// Équipement : une recrue formée avec du fer (milli par soldat) est
+    /// armée ; une armée entièrement équipée est plus forte de ce bonus (‰).
+    pub equipment_iron_milli: i64,
+    pub equipment_bonus_permille: i64,
+    /// Terres prises à un joueur : ni logement ni emplois pendant ce temps
+    /// (tours), le temps de les intégrer. Freine l'effet boule de neige.
+    pub integration_ticks: u32,
     /// Capacité de stockage de chaque ressource = base + par habitant (unités).
     pub storage_base: i64,
     pub storage_per_person: i64,
@@ -287,9 +300,14 @@ impl Default for GameConfig {
             training_per_100k: 50,
             training_per_barracks_per_100k: 80,
             max_barracks_bonus: 4,
-            garrison_training_max: 3_000,
+            garrison_training_max: 2_500,
             garrison_training_time: 4_000,
             auto_food_margin_permille: 300,
+            experience_bonus_permille: 500,
+            experience_time: 3000,
+            equipment_iron_milli: 400,
+            equipment_bonus_permille: 500,
+            integration_ticks: 2400,
             storage_base: 5_000,
             storage_per_person: 3,
 

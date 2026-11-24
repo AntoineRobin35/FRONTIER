@@ -85,3 +85,18 @@ export function canPay(stock: Cost, cost: Cost): boolean {
 export function roman(level: number): string {
   return ['', 'I', 'II', 'III', 'IV', 'V'][level] ?? String(level);
 }
+
+/** Coût en icônes : « ▲ 600 · ■ 300 ». */
+export function costIcons(cost: Cost | null | undefined): string {
+  if (!cost) return '';
+  return RESOURCES.filter((r) => cost[r.key] > 0)
+    .map((r) => `${r.icon} ${formatNumber(cost[r.key])}`)
+    .join(' · ');
+}
+
+/** Nombre signé : « +12 », « −3 », « 0 ». */
+export function signed(n: number): string {
+  if (n > 0) return `+${formatNumber(n)}`;
+  if (n < 0) return `−${formatNumber(-n)}`;
+  return '0';
+}

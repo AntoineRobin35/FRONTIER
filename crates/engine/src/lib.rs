@@ -28,6 +28,7 @@ pub mod update;
 
 mod attack;
 mod buildings;
+mod insight;
 mod naval;
 mod population;
 mod research;
@@ -38,6 +39,7 @@ mod tests;
 
 pub use attack::Attack;
 pub use buildings::Building;
+pub use insight::{AttackEstimate, PlanOutcome};
 pub use config::{BuildingDef, Cost, GameConfig, TechDef, UnitDef};
 pub use defs::{Branch, BuildingKind, Deposit, Effect, Job, Resource, TechId, Unit};
 pub use population::{JobSlots, PopulationPlan, MILLI};

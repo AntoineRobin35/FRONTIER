@@ -17,6 +17,11 @@ let paused = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let last = 0;
 let accumulated = 0;
+/** Part des soldats envoyés par un clic (pour les estimations d'attaque). */
+let ratio = 500;
+let lastInsight = 0;
+/** Les aperçus coûtent plus cher qu'un tour : quelques fois par seconde suffit. */
+const INSIGHT_INTERVAL_MS = 300;
 
 const MAX_STEPS_PER_FRAME = 8;
 
@@ -36,6 +41,8 @@ function loop(): void {
   const now = performance.now();
   const dt = now - last;
   last = now;
+  // Aperçus aussi en pause : c'est là qu'on prend le temps de décider.
+  if (session && now - lastInsight >= INSIGHT_INTERVAL_MS) postInsight(now);
   if (!session || paused) return;
 
   accumulated += dt * speed;
@@ -49,6 +56,12 @@ function loop(): void {
   }
   // Si le moteur prend du retard, on ralentit plutôt que d'accumuler.
   if (steps === MAX_STEPS_PER_FRAME) accumulated = 0;
+}
+
+function postInsight(now: number): void {
+  if (!session) return;
+  lastInsight = now;
+  post({ kind: 'insight', insight: JSON.parse(session.insight_json(human, ratio)) });
 }
 
 ctx.onmessage = async (event: MessageEvent<ToWorker>) => {
@@ -106,6 +119,11 @@ ctx.onmessage = async (event: MessageEvent<ToWorker>) => {
 
       case 'pause':
         paused = msg.paused;
+        break;
+
+      case 'ratio':
+        ratio = msg.ratio;
+        postInsight(performance.now());
         break;
 
       case 'stop':

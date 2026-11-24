@@ -115,7 +115,9 @@ impl Game {
     pub fn housing(&self, id: PlayerId) -> i64 {
         let Some(p) = self.player(id) else { return 0 };
         let cfg = &self.config;
-        let territory = cfg.housing_factor * icbrt((p.tiles as u64) * (p.tiles as u64)) as i64;
+        // Les conquêtes pas encore intégrées ne logent personne.
+        let settled = p.tiles.saturating_sub(self.unsettled_tiles(id)) as u64;
+        let territory = cfg.housing_factor * icbrt(settled * settled) as i64;
         let buildings: i64 = BuildingKind::ALL
             .iter()
             .map(|&k| p.buildings[k.index()] as i64 * cfg.building(k).housing)
@@ -155,6 +157,7 @@ impl Game {
         let mut slots = JobSlots::default();
         let Some(p) = self.player(id) else { return slots };
         let counts = &self.terrain_tiles[id as usize - 1];
+        let unsettled = &self.unsettled[id as usize - 1];
         for job in Job::ALL {
             if !self.job_unlocked(id, job) {
                 continue;
@@ -163,7 +166,7 @@ impl Game {
             let per_tile = &self.config.jobs_per_tile[j];
             let mut total = 0i64;
             for t in 0..Terrain::COUNT {
-                total += counts[t] as i64 * per_tile[t] as i64;
+                total += counts[t].saturating_sub(unsettled[t]) as i64 * per_tile[t] as i64;
             }
             slots.terrain[j] = total; // ‰ × cases = milli-personnes
         }
@@ -199,10 +202,17 @@ impl Game {
     /// Production par tour (milli), avec la répartition actuelle.
     pub fn production(&self, id: PlayerId) -> Cost {
         let Some(p) = self.player(id) else { return Cost::default() };
+        self.production_for(id, &p.jobs)
+    }
+
+    /// Production par tour (milli) pour une répartition des métiers donnée.
+    pub fn production_for(&self, id: PlayerId, jobs: &[i64; JOB_COUNT]) -> Cost {
         let slots = self.job_slots(id);
         let mut out = Cost::default();
         for job in Job::ALL {
-            let amount = self.boosted(id, Effect::JobYield(job), self.job_output(job, p.jobs[job.index()], &slots));
+            let raw = self.job_output(job, jobs[job.index()], &slots);
+            let raw = raw * self.experience_factor(id, job, jobs[job.index()]) / 1000;
+            let amount = self.boosted(id, Effect::JobYield(job), raw);
             match job.resource() {
                 crate::defs::Resource::Food => out.food += amount,
                 crate::defs::Resource::Wood => out.wood += amount,
@@ -213,15 +223,39 @@ impl Game {
         out
     }
 
+    /// Multiplicateur d'expérience d'un métier pour `workers` travailleurs (‰).
+    pub fn experience_factor(&self, id: PlayerId, job: Job, workers: i64) -> i64 {
+        let Some(p) = self.player(id) else { return 1000 };
+        if workers <= 0 {
+            return 1000;
+        }
+        let share = p.veterans[job.index()].min(workers) * 1000 / workers;
+        1000 + self.config.experience_bonus_permille * share / 1000
+    }
+
+    /// Part expérimentée de chaque métier (‰).
+    pub fn experience_share(&self, id: PlayerId) -> [i64; JOB_COUNT] {
+        let Some(p) = self.player(id) else { return [0; JOB_COUNT] };
+        std::array::from_fn(|j| if p.jobs[j] > 0 { p.veterans[j].min(p.jobs[j]) * 1000 / p.jobs[j] } else { 0 })
+    }
+
+    /// Multiplicateur de force dû à l'équipement de l'armée (‰).
+    pub fn equipment_factor(&self, id: PlayerId) -> i64 {
+        let Some(p) = self.player(id) else { return 1000 };
+        1000 + self.config.equipment_bonus_permille * p.equipment / 1000
+    }
+
     /// Nourriture consommée par tour (milli).
     pub fn food_consumption(&self, id: PlayerId) -> i64 {
         let Some(p) = self.player(id) else { return 0 };
-        let cfg = &self.config;
         let away: i64 = self.away_soldiers(id).iter().sum();
-        (p.workers * cfg.worker_food_milli
-            + (p.army() + away) * cfg.soldier_food_milli
-            + p.garrison * cfg.garrison_food_milli)
-            / MILLI
+        self.food_consumption_for(p.workers, p.army() + away, p.garrison)
+    }
+
+    /// Nourriture consommée par tour (milli) pour une composition donnée.
+    pub fn food_consumption_for(&self, workers: i64, soldiers: i64, garrison: i64) -> i64 {
+        let cfg = &self.config;
+        (workers * cfg.worker_food_milli + soldiers * cfg.soldier_food_milli + garrison * cfg.garrison_food_milli) / MILLI
     }
 
     /// Un métier est débloqué par le premier bâtiment correspondant terminé
@@ -342,6 +376,8 @@ impl Game {
             / self.modifier(id, Effect::GarrisonTraining).max(1))
         .max(1);
         let melee_cost = costs[Unit::Melee.index()];
+        let iron_each = self.config.equipment_iron_milli;
+        let army_before: i64 = away.iter().sum::<i64>() + self.player_ref(id).soldiers.iter().sum::<i64>();
 
         let p = self.player_mut(id);
         let plan = p.plan.clone();
@@ -365,6 +401,7 @@ impl Game {
         }
 
         let mut budget = rate;
+        let mut army = army_before;
         // Renvoyer les surplus (gratuit).
         for u in 0..UNIT_COUNT {
             let surplus = p.soldiers[u] - targets[u];
@@ -393,6 +430,12 @@ impl Game {
             p.workers -= n;
             p.resources.pay(&costs[u].scaled(n, MILLI));
             budget -= n;
+            // Équipement : autant de recrues que le fer le permet.
+            let equipped = if iron_each > 0 { n.min(p.resources.iron.max(0) * MILLI / iron_each) } else { 0 };
+            p.resources.iron -= equipped * iron_each / MILLI;
+            let total = (army + n).max(1);
+            p.equipment = (p.equipment * army + 1000 * equipped + total / 2) / total;
+            army += n;
         }
 
         // Garnison.
@@ -407,7 +450,10 @@ impl Game {
             let n = (garrison_target - p.garrison).min(garrison_budget).min(p.workers).min(affordable);
             if n > 0 {
                 // Les recrues diluent l'entraînement moyen.
-                p.garrison_training = (p.garrison_training * p.garrison + 1000 * n) / (p.garrison + n);
+                // Arrondi au plus proche : tronquer annulait l'entraînement à
+                // chaque recrue tant que la population grandissait.
+                let total = p.garrison + n;
+                p.garrison_training = (p.garrison_training * p.garrison + 1000 * n + total / 2) / total;
                 p.garrison += n;
                 p.workers -= n;
                 p.resources.pay(&melee_cost.scaled(n, MILLI));
@@ -431,19 +477,34 @@ impl Game {
 
     /// Répartit les travailleurs entre les métiers.
     fn assign_jobs(&mut self, id: PlayerId) {
+        let p = self.player_ref(id);
+        let (workers, mix) = (p.workers, p.plan.job_mix);
+        let jobs = self.jobs_for(id, workers, mix, self.food_consumption(id));
+        let time = self.config.experience_time.max(1);
+        let p = self.player_mut(id);
+        p.jobs = jobs;
+        // Les derniers arrivés partent les premiers ; les autres apprennent.
+        for j in 0..JOB_COUNT {
+            let v = p.veterans[j].min(jobs[j]);
+            let gap = jobs[j] - v;
+            p.veterans[j] = v + if gap > 0 { (gap / time).max(1) } else { 0 };
+        }
+    }
+
+    /// Répartition des métiers pour `workers` travailleurs (milli) et une
+    /// consommation de nourriture donnée (milli/tour). Lecture seule : sert au
+    /// tour de jeu et aux aperçus de l'interface.
+    pub fn jobs_for(&self, id: PlayerId, workers: i64, job_mix: Option<[u16; JOB_COUNT]>, eaten: i64) -> [i64; JOB_COUNT] {
         let slots = self.job_slots(id);
         let unlocked: Vec<bool> = Job::ALL.iter().map(|&j| self.job_unlocked(id, j)).collect();
         // Marge de nourriture pour faire grandir la population ; inutile quand
         // le logement est plein (l'excédent serait perdu) : 5 % de sécurité.
         let margin = if self.population(id) >= self.housing(id) { 50 } else { self.config.auto_food_margin_permille };
-        let need_food = self.food_consumption(id) * (1000 + margin) / 1000;
+        let need_food = eaten * (1000 + margin) / 1000;
         let base_food_yield = self.config.base_yield_milli[Job::Gatherer.index()];
-
-        let p = self.player_ref(id);
-        let workers = p.workers;
         let mut jobs = [0i64; JOB_COUNT];
 
-        match p.plan.job_mix {
+        match job_mix {
             Some(mix) => {
                 let total: i64 = (0..JOB_COUNT).filter(|&j| unlocked[j]).map(|j| mix[j] as i64).sum();
                 if total == 0 {
@@ -502,7 +563,7 @@ impl Game {
                 jobs[g] += rest;
             }
         }
-        self.player_mut(id).jobs = jobs;
+        jobs
     }
 
 }

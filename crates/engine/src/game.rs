@@ -87,6 +87,11 @@ pub struct Game {
     /// Nombre de cases de chaque terrain possédées par chaque joueur
     /// (indexé par `id - 1`) : la production se calcule sans parcourir la carte.
     pub(crate) terrain_tiles: Vec<[u32; Terrain::COUNT]>,
+    /// Terres conquises pas encore intégrées : tour de fin par case (0 = aucune),
+    /// compte par joueur et terrain, et file des fins dans l'ordre.
+    pub(crate) unsettled_until: Vec<u32>,
+    pub(crate) unsettled: Vec<[u32; Terrain::COUNT]>,
+    pub(crate) unsettled_queue: std::collections::VecDeque<(u32, TileIdx)>,
     /// Dernier joueur à avoir pris une case à chaque joueur (pour le journal).
     pub(crate) last_conqueror: Vec<Option<PlayerId>>,
     pub(crate) attacks: Vec<Attack>,
@@ -131,6 +136,9 @@ impl Game {
             land_tiles,
             owner: vec![NEUTRAL; n],
             terrain_tiles: vec![[0; Terrain::COUNT]; players.len()],
+            unsettled_until: vec![0; n],
+            unsettled: vec![[0; Terrain::COUNT]; players.len()],
+            unsettled_queue: std::collections::VecDeque::new(),
             last_conqueror: vec![None; players.len()],
             players,
             attacks: Vec::new(),
@@ -265,6 +273,10 @@ impl Game {
             h.write_u64(p.workers as u64);
             h.write_u64(p.garrison as u64);
             h.write_u64(p.garrison_training as u64);
+            h.write_u64(p.equipment as u64);
+            for v in p.veterans {
+                h.write_u64(v as u64);
+            }
             for t in p.techs {
                 h.write_u64(t as u64);
             }
@@ -309,6 +321,7 @@ impl Game {
             match self.phase {
                 Phase::Spawn => self.update_spawn_phase(),
                 Phase::Playing => {
+                    self.run_integration();
                     self.run_population();
                     self.run_buildings();
                     self.run_attacks();
@@ -409,6 +422,38 @@ impl Game {
     // Utilitaires partagés par les systèmes
     // ------------------------------------------------------------------
 
+    /// Les terres conquises dont le délai est écoulé sont intégrées.
+    fn run_integration(&mut self) {
+        let now = self.tick as u32;
+        while let Some(&(until, tile)) = self.unsettled_queue.front() {
+            if until > now {
+                break;
+            }
+            self.unsettled_queue.pop_front();
+            // Entrée périmée si la case a changé de main entre-temps.
+            if self.unsettled_until[tile as usize] == until {
+                self.unsettled_until[tile as usize] = 0;
+                let owner = self.owner[tile as usize];
+                if owner != NEUTRAL {
+                    self.unsettled[owner as usize - 1][self.map.terrain(tile) as usize] -= 1;
+                }
+            }
+        }
+    }
+
+    /// Cases conquises d'un joueur pas encore intégrées.
+    pub fn unsettled_tiles(&self, id: PlayerId) -> u32 {
+        if id == NEUTRAL || id as usize > self.unsettled.len() {
+            return 0;
+        }
+        self.unsettled[id as usize - 1].iter().sum()
+    }
+
+    /// Vrai si la case est une conquête pas encore intégrée.
+    pub fn is_unsettled(&self, tile: TileIdx) -> bool {
+        self.unsettled_until[tile as usize] != 0
+    }
+
     /// Seule fonction qui change le propriétaire d'une case : tient à jour
     /// les compteurs, les bâtiments capturés et la liste des changements.
     pub(crate) fn set_owner(&mut self, tile: TileIdx, new_owner: PlayerId) {
@@ -417,6 +462,20 @@ impl Game {
             return;
         }
         let terrain = self.map.terrain(tile) as usize;
+        // Une case pas encore intégrée cesse de compter pour l'ancien maître.
+        if self.unsettled_until[tile as usize] != 0 {
+            if old != NEUTRAL {
+                self.unsettled[old as usize - 1][terrain] -= 1;
+            }
+            self.unsettled_until[tile as usize] = 0;
+        }
+        // Prise à un joueur : il faudra du temps pour l'intégrer.
+        if old != NEUTRAL && new_owner != NEUTRAL && self.config.integration_ticks > 0 {
+            let until = (self.tick as u32).saturating_add(self.config.integration_ticks).max(1);
+            self.unsettled_until[tile as usize] = until;
+            self.unsettled[new_owner as usize - 1][terrain] += 1;
+            self.unsettled_queue.push_back((until, tile));
+        }
         if old != NEUTRAL {
             let i = old as usize - 1;
             self.players[i].tiles -= 1;

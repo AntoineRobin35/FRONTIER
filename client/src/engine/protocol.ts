@@ -151,6 +151,14 @@ export interface PlayerView {
   garrison: number;
   garrison_training: number;
   defense: number;
+  /** Défense apportée par la garnison seule. */
+  garrison_power: number;
+  /** Part expérimentée de chaque métier (‰). */
+  experience: number[];
+  /** Part de l'armée équipée de fer (‰). */
+  equipment: number;
+  /** Cases conquises pas encore intégrées. */
+  unsettled: number;
   resources: Cost;
   storage: number;
   production: Cost;
@@ -272,6 +280,10 @@ export interface RulesConfig {
   }[];
   job_requires: (BuildingKind | null)[];
   fort_radius: number;
+  experience_bonus_permille: number;
+  equipment_bonus_permille: number;
+  equipment_iron_milli: number;
+  integration_ticks: number;
   garrison_training_max: number;
   boat_wood: number;
 }
@@ -291,16 +303,58 @@ export interface MapPayload {
   rules: RulesConfig;
 }
 
+/** Issue d'une position de curseur (Soldats ou Garnison), une fois atteinte. */
+export interface PlanPreview {
+  permille: number;
+  workers: number;
+  soldiers: number;
+  garrison: number;
+  /** Production moins nourriture mangée, par seconde. */
+  net: Cost;
+  defense: number;
+}
+
+/** Estimation d'une attaque avec l'envoi actuel (0 = terres libres). */
+export interface EstimateView {
+  target: PlayerId;
+  sent: number;
+  power: number;
+  defense: number;
+  tiles: number;
+  share_permille: number;
+  conquers_all: boolean;
+}
+
+/** Ce que rapporterait un bâtiment de plus (bonus de l'Académie compris). */
+export interface BuildingGain {
+  output: Cost;
+  jobs: number;
+  housing: number;
+}
+
+/** Aperçus « que se passerait-il si… » calculés par le moteur pour le joueur. */
+export interface Insight {
+  soldiers: PlanPreview[];
+  garrison: PlanPreview[];
+  estimates: EstimateView[];
+  from_buildings: Cost;
+  from_land: Cost;
+  gains: BuildingGain[];
+  fort_defense_permille: number;
+}
+
 export type ToWorker =
   | { kind: 'hello' }
   | { kind: 'start'; setup: SessionSetup; human: PlayerId }
   | { kind: 'intent'; intent: Intent }
   | { kind: 'speed'; speed: number }
   | { kind: 'pause'; paused: boolean }
+  | { kind: 'ratio'; ratio: number }
   | { kind: 'stop' };
 
 export type FromWorker =
   | { kind: 'agents'; agents: AgentInfo[] }
   | { kind: 'map'; map: MapPayload }
   | { kind: 'tick'; snapshot: Snapshot; changes: Uint32Array }
+  | { kind: 'insight'; insight: Insight | null }
   | { kind: 'error'; message: string };

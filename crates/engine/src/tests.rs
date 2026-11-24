@@ -180,8 +180,8 @@ fn garrison_trains_and_defends() {
     run(&mut game, 1500);
     let p = game.player(1).unwrap();
     assert!(p.garrison > 0);
-    assert!(p.garrison_training > early, "la garnison s'entraîne");
-    assert!(game.defense_power(1) > defense_early);
+    assert!(p.garrison_training > early, "la garnison s'entraîne : {early} → {} (pop {} / {})", p.garrison_training, game.population(1), game.housing(1));
+    assert!(game.defense_power(1) > defense_early, "{} {} | {:?} g{} t{} e{}", game.defense_power(1), defense_early, p.soldiers, p.garrison, p.garrison_training, p.equipment);
 }
 
 #[test]
@@ -568,4 +568,133 @@ fn short_expeditions_grow_evenly() {
     }
     let (cx, cy) = (sx as f64 / n as f64, sy as f64 / n as f64);
     assert!((cx - 100.0).abs() < 2.0 && (cy - 100.0).abs() < 2.0, "centre ({cx:.1}, {cy:.1})");
+}
+
+// --- Aperçus pour l'interface --------------------------------------------
+
+/// Cases réellement prises par une attaque menée jusqu'au bout.
+fn real_attack(game: &mut Game, target: PlayerId, ratio: u16) -> u32 {
+    let before = game.player(1).unwrap().tiles;
+    game.tick(&[(1, Intent::Attack { target, ratio_permille: ratio })]);
+    let mut n = 0;
+    while !game.attacks().is_empty() && n < 20_000 {
+        game.tick(&[]);
+        n += 1;
+    }
+    game.player(1).unwrap().tiles - before
+}
+
+fn frozen(game: &mut Game) {
+    for id in 1..=game.players().len() as PlayerId {
+        game.player_mut(id).plan.soldiers_permille = 1000;
+        game.player_mut(id).resources = Cost::default();
+    }
+}
+
+#[test]
+fn attack_estimate_matches_the_real_fight() {
+    for (attack, defense) in [(3000, 600), (3000, 3000), (1500, 4000)] {
+        let mut game = start(test_map(300, 150, None), &[(75, 75), (225, 75)]);
+        split_map(&mut game);
+        game.player_mut(1).soldiers = [attack * 1000, 0, 0];
+        game.player_mut(2).soldiers = [defense * 1000, 0, 0];
+        frozen(&mut game);
+        let estimate = game.estimate_attack(1, 2, 1000).unwrap();
+        let real = real_attack(&mut game, 2, 1000);
+        let (e, r) = (estimate.tiles as f64, real.max(1) as f64);
+        assert!(e / r > 0.6 && e / r < 1.6, "{attack} contre {defense} : estimé {e}, réel {r}");
+    }
+}
+
+#[test]
+fn neutral_estimate_matches_the_real_expedition() {
+    let mut game = start(test_map(300, 300, None), &[(150, 150)]);
+    game.player_mut(1).soldiers = [400_000, 0, 0];
+    frozen(&mut game);
+    let estimate = game.estimate_attack(1, NEUTRAL, 500).unwrap().tiles as f64;
+    let real = real_attack(&mut game, NEUTRAL, 500) as f64;
+    assert!(estimate / real > 0.8 && estimate / real < 1.25, "estimé {estimate}, réel {real}");
+}
+
+#[test]
+fn plan_outcome_predicts_fewer_workers_and_more_defense() {
+    let mut game = start_two_players();
+    run(&mut game, 50);
+    let mut plan = game.player(1).unwrap().plan.clone();
+    plan.soldiers_permille = 100;
+    let few = game.plan_outcome(1, &plan);
+    plan.soldiers_permille = 600;
+    let many = game.plan_outcome(1, &plan);
+    assert!(many.workers < few.workers);
+    assert!(many.defense > few.defense);
+    assert!(many.production.food + many.production.wood < few.production.food + few.production.wood);
+}
+
+// --- Expérience, équipement, intégration ------------------------------------
+
+#[test]
+fn workers_gain_experience_and_produce_more() {
+    let mut game = start_two_players();
+    run(&mut game, 20);
+    let fresh = game.production(1).food + game.production(1).wood;
+    run(&mut game, 3000);
+    let share = game.experience_share(1);
+    assert!(share[0] > 500, "expérience des cueilleurs : {share:?}");
+    // Même répartition, même nombre de travailleurs : seule l'expérience change.
+    let jobs = game.player(1).unwrap().jobs;
+    let mut novices = game.player(1).unwrap().clone();
+    novices.veterans = [0; 4];
+    let veteran_output = game.production_for(1, &jobs);
+    *game.player_mut(1) = novices;
+    let novice_output = game.production_for(1, &jobs);
+    assert!(veteran_output.food > novice_output.food * 11 / 10, "{veteran_output:?} contre {novice_output:?}");
+    let _ = fresh;
+}
+
+#[test]
+fn moving_workers_away_loses_their_experience() {
+    let mut game = start_two_players();
+    run(&mut game, 3000);
+    let before = game.player(1).unwrap().veterans[0];
+    assert!(before > 0);
+    // Tous les cueilleurs passent bûcherons : leur expérience de cueilleur est perdue.
+    let plan = PopulationPlan { job_mix: Some([0, 10, 0, 0]), ..game.player(1).unwrap().plan.clone() };
+    game.tick(&[(1, Intent::SetPlan { plan })]);
+    run(&mut game, 5);
+    assert_eq!(game.player(1).unwrap().veterans[0], 0);
+}
+
+#[test]
+fn iron_equips_recruits_and_makes_them_stronger() {
+    let mut game = start_two_players();
+    game.player_mut(1).resources = Cost::new(100_000, 100_000, 0, 100_000).to_milli();
+    game.player_mut(2).resources = Cost::new(100_000, 100_000, 0, 0).to_milli();
+    let plan = PopulationPlan { soldiers_permille: 600, ..Default::default() };
+    game.tick(&[(1, Intent::SetPlan { plan: plan.clone() }), (2, Intent::SetPlan { plan })]);
+    run(&mut game, 600);
+    assert!(game.player(1).unwrap().equipment > 300, "équipement {}", game.player(1).unwrap().equipment);
+    assert_eq!(game.player(2).unwrap().equipment, 0);
+    let units = [100_000, 0, 0];
+    assert!(game.attack_power(1, &units) > game.attack_power(2, &units) * 11 / 10);
+}
+
+#[test]
+fn conquered_land_must_be_integrated() {
+    let mut game = start_two_players();
+    split_map(&mut game);
+    let housing = game.housing(1);
+    // Le joueur 1 prend une bande au joueur 2.
+    for tile in 0..game.map().len() as TileIdx {
+        let (x, _) = game.map().xy(tile);
+        if game.owner(tile) == 2 && x < 40 {
+            game.set_owner(tile, 1);
+        }
+    }
+    let taken = game.unsettled_tiles(1);
+    assert!(taken > 0);
+    assert_eq!(game.housing(1), housing, "les conquêtes ne logent personne au début");
+    let wait = game.config().integration_ticks + 2;
+    run(&mut game, wait);
+    assert_eq!(game.unsettled_tiles(1), 0);
+    assert!(game.housing(1) > housing);
 }

@@ -7,8 +7,8 @@
 use frontier_ai::{create_agent, BotHost, Difficulty};
 use frontier_engine::rng::hash2;
 use frontier_engine::{
-    BuildingKind, Cost, Game, GameConfig, GameEvent, GameSetup, Intent, Job, Phase, PlayerId, PlayerSetup,
-    PopulationPlan, Research, SetupError, TechId, TickUpdate, TileIdx, Unit, MILLI,
+    BuildingKind, Cost, Effect, Game, GameConfig, GameEvent, GameSetup, Intent, Job, Phase, PlayerId, PlayerSetup,
+    PopulationPlan, Research, SetupError, TechId, TickUpdate, TileIdx, Unit, MILLI, NEUTRAL,
 };
 use frontier_worldgen::{generate, MapSize, WorldParams};
 use serde::{Deserialize, Serialize};
@@ -108,6 +108,82 @@ impl Session {
         self.game.tick(&intents)
     }
 
+    /// Aperçus pour le joueur `me` (curseurs, attaques, bâtiments), en unités
+    /// par seconde. `ratio_permille` : part des soldats envoyés par un clic.
+    pub fn insight(&self, me: PlayerId, ratio_permille: u16) -> Option<Insight> {
+        let game = &self.game;
+        let p = game.player(me).filter(|p| p.alive && p.spawned)?;
+        let per_second = 1000 / game.config().tick_ms.max(1) as i64;
+        let preview = |plan: &PopulationPlan, key: u16| {
+            let o = game.plan_outcome(me, plan);
+            let mut net = o.production;
+            net.food -= o.eaten;
+            PlanPreview {
+                permille: key,
+                workers: o.workers / MILLI,
+                soldiers: o.soldiers / MILLI,
+                garrison: o.garrison / MILLI,
+                net: units(net.scaled(per_second, 1)),
+                defense: o.defense / MILLI,
+            }
+        };
+        let room = |used: u16| (0..=800u16).step_by(50).filter(move |&v| v + used <= 1000);
+        let soldiers = room(p.plan.garrison_permille)
+            .map(|v| preview(&PopulationPlan { soldiers_permille: v, ..p.plan.clone() }, v))
+            .collect();
+        let garrison = room(p.plan.soldiers_permille)
+            .filter(|&v| v <= 600)
+            .map(|v| preview(&PopulationPlan { garrison_permille: v, ..p.plan.clone() }, v))
+            .collect();
+
+        let targets = std::iter::once(NEUTRAL).chain(game.players().iter().filter(|o| o.alive && o.id != me).map(|o| o.id));
+        let estimates = targets
+            .filter_map(|target| {
+                let e = game.estimate_attack(me, target, ratio_permille)?;
+                let tiles = if target == NEUTRAL { 0 } else { game.player(target).map_or(0, |t| t.tiles) };
+                Some(EstimateView {
+                    target,
+                    sent: e.sent / MILLI,
+                    power: e.power / MILLI,
+                    defense: e.defense / MILLI,
+                    tiles: e.tiles,
+                    share_permille: if tiles > 0 { (e.tiles as u64 * 1000 / tiles as u64) as u32 } else { 0 },
+                    conquers_all: e.conquers_all,
+                })
+            })
+            .collect();
+
+        let (from_buildings, from_land) = game.production_split(me);
+        let cfg = game.config();
+        let gains = BuildingKind::ALL.map(|k| {
+            let def = cfg.building(k);
+            let mut output = Cost::default();
+            if let Some(job) = def.job {
+                let amount = game.modifier(me, Effect::JobYield(job)) * def.jobs * def.job_yield_milli / 1000 * per_second / MILLI;
+                match job {
+                    Job::Gatherer => output.food = amount,
+                    Job::Lumberjack => output.wood = amount,
+                    Job::Miner => output.stone = amount,
+                    Job::Smith => output.iron = amount,
+                }
+            }
+            BuildingGain {
+                output,
+                jobs: def.jobs,
+                housing: game.modifier(me, Effect::Housing) * def.housing / 1000,
+            }
+        });
+        Some(Insight {
+            soldiers,
+            garrison,
+            estimates,
+            from_buildings: units(from_buildings.scaled(per_second, 1)),
+            from_land: units(from_land.scaled(per_second, 1)),
+            gains,
+            fort_defense_permille: game.modifier(me, Effect::FortDefense) * cfg.fort_defense_permille / 1000,
+        })
+    }
+
     /// Résumé de l'état pour l'interface (personnes et ressources en unités entières).
     pub fn snapshot(&self) -> Snapshot<'_> {
         let game = &self.game;
@@ -184,6 +260,10 @@ fn player_view<'a>(game: &'a Game, id: PlayerId, per_second: i64) -> PlayerView<
         garrison: p.garrison / MILLI,
         garrison_training: p.garrison_training,
         defense: game.defense_power(id) / MILLI,
+        garrison_power: game.garrison_defense(id, p.garrison, p.garrison_training) / MILLI,
+        experience: game.experience_share(id),
+        equipment: p.equipment,
+        unsettled: game.unsettled_tiles(id),
         resources: units(p.resources),
         storage: game.storage(id) / MILLI,
         production: units(production.scaled(per_second, 1)),
@@ -237,6 +317,14 @@ pub struct PlayerView<'a> {
     pub garrison: i64,
     pub garrison_training: i64,
     pub defense: i64,
+    /// Défense apportée par la garnison seule.
+    pub garrison_power: i64,
+    /// Part expérimentée de chaque métier (‰).
+    pub experience: [i64; 4],
+    /// Part de l'armée équipée de fer (‰).
+    pub equipment: i64,
+    /// Cases conquises pas encore intégrées.
+    pub unsettled: u32,
     pub resources: Cost,
     pub storage: i64,
     pub production: Cost,
@@ -248,6 +336,54 @@ pub struct PlayerView<'a> {
     pub unit_unlocked: [bool; 3],
     pub buildings: [u32; 10],
     pub build_costs: [Cost; 10],
+}
+
+/// Aperçus pour l'interface d'un joueur (unités entières, par seconde).
+#[derive(Serialize)]
+pub struct Insight {
+    /// Issue de chaque position du curseur Soldats (0 à 80 %, par pas de 5 %).
+    pub soldiers: Vec<PlanPreview>,
+    /// Issue de chaque position du curseur Garnison.
+    pub garrison: Vec<PlanPreview>,
+    /// Estimation d'une attaque avec l'envoi actuel, par cible (0 = terres libres).
+    pub estimates: Vec<EstimateView>,
+    /// Production actuelle des bâtiments et du terrain.
+    pub from_buildings: Cost,
+    pub from_land: Cost,
+    /// Ce que rapporterait un bâtiment de plus de chaque type (bonus compris).
+    pub gains: [BuildingGain; 10],
+    /// Multiplicateur de défense d'un fort (‰).
+    pub fort_defense_permille: i64,
+}
+
+#[derive(Serialize)]
+pub struct PlanPreview {
+    pub permille: u16,
+    pub workers: i64,
+    pub soldiers: i64,
+    pub garrison: i64,
+    /// Production moins nourriture mangée.
+    pub net: Cost,
+    pub defense: i64,
+}
+
+#[derive(Serialize)]
+pub struct EstimateView {
+    pub target: PlayerId,
+    pub sent: i64,
+    pub power: i64,
+    pub defense: i64,
+    pub tiles: u32,
+    /// Part du territoire de la cible (‰).
+    pub share_permille: u32,
+    pub conquers_all: bool,
+}
+
+#[derive(Serialize, Clone, Copy)]
+pub struct BuildingGain {
+    pub output: Cost,
+    pub jobs: i64,
+    pub housing: i64,
 }
 
 #[derive(Serialize)]

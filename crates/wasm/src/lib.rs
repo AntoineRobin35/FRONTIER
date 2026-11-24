@@ -121,6 +121,11 @@ impl WasmSession {
         serde_json::to_string(&self.inner.snapshot()).unwrap_or_else(|_| "{}".into())
     }
 
+    /// Aperçus pour un joueur (JSON, `null` s'il n'est pas en jeu).
+    pub fn insight_json(&self, player: u16, ratio_permille: u16) -> String {
+        serde_json::to_string(&self.inner.insight(player, ratio_permille)).unwrap_or_else(|_| "null".into())
+    }
+
     pub fn state_hash(&self) -> String {
         format!("{:016x}", self.inner.game().state_hash())
     }

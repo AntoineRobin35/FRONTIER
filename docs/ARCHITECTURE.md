@@ -94,6 +94,11 @@ la production, la formation, les chantiers, le logement, les réserves, le comba
 l'expansion. Ajouter une technologie = une ligne dans `GameConfig::techs` (et son texte
 dans `client/src/ui/labels.ts`), sans toucher aux systèmes.
 
+**Aperçus pour l'interface** (`insight.rs`, lecture seule) : issue d'un plan de
+population, estimation d'une attaque (mêmes formules que le combat, testée contre
+de vrais combats), production des bâtiments et du terrain. La session les expose
+(`Session::insight`), le worker les envoie au client quelques fois par seconde.
+
 Le design et les décisions sont dans `docs/RECHERCHE_UX.md` (et `docs/DESIGN_V03.md`).
 
 ## 4. Le client

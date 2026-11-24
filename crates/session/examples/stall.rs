@@ -18,9 +18,9 @@ fn main() {
         let sur = sense(g, p.id);
         let n: Vec<String> = sur.neighbors().map(|id| format!("{id}(déf {})", g.defense_power(id) / 1000)).collect();
         println!(
-            "{} {:<12} cases {:>6} pop {:>5}/{:<5} soldats {:?} garnison {} x{} | frappe60% {} défense {} | voisins {:?} attaques {}",
-            p.id, p.name, p.tiles, g.population(p.id) / 1000, g.housing(p.id) / 1000,
-            p.soldiers.iter().map(|x| x / 1000).collect::<Vec<_>>(), p.garrison / 1000, p.garrison_training,
+            "{} {:<12} cases {:>6} (à intégrer {}) pop {:>5}/{:<5} soldats {:?} équip {}‰ exp {:?} garnison {} x{} fer {} | frappe60% {} défense {} | voisins {:?} attaques {}",
+            p.id, p.name, p.tiles, g.unsettled_tiles(p.id), g.population(p.id) / 1000, g.housing(p.id) / 1000,
+            p.soldiers.iter().map(|x| x / 1000).collect::<Vec<_>>(), p.equipment, g.experience_share(p.id), p.garrison / 1000, p.garrison_training, p.resources.iron / 1000,
             BotCore::strike_power(g, p.id, 600) / 1000, g.defense_power(p.id) / 1000, n,
             g.attacks().iter().filter(|a| a.attacker == p.id).count()
         );

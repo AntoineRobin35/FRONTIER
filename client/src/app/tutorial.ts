@@ -33,7 +33,8 @@ const CARDS: Card[] = [
     body: `
       <p>Ta population grandit tant que tu produis <b>plus de nourriture</b> que tu n’en manges, jusqu’à ta place maximale (territoire + villes).</p>
       <p>Le curseur <b>Soldats</b> choisit la part qui se bat. Les autres <b>travaillent</b> : nourriture, bois, puis pierre et fer.</p>
-      <p>La <b>garnison</b> (réglages détaillés) ne fait que défendre, mais devient de plus en plus forte avec le temps.</p>`,
+      <p>La <b>garnison</b> (réglages détaillés) ne fait que défendre, mais devient de plus en plus forte avec le temps.</p>
+      <p>Tes choix durent : un travailleur qui reste à son poste gagne en <b>expérience</b> (jusqu’à +50 %), une recrue formée avec du <b>fer</b> est armée (+50 %), une terre conquise met quelques minutes à s’<b>intégrer</b>.</p>`,
   },
   {
     title: 'Bâtiments et gisements',
@@ -61,9 +62,9 @@ const CARDS: Card[] = [
         <div class="hm top">Temps · <b>Académie</b> · <b>ressources</b> (stock, +/s) · population · Aide</div>
         <div class="hm obj">🎯 Objectif en cours</div>
         <div class="hm left">Ta population<br>curseurs <b>Soldats</b> et <b>Envoi</b><br>attaques en cours</div>
-        <div class="hm right">Civilisations<br>% des terres · ⚔ défense</div>
+        <div class="hm right">Civilisations<br>% des terres · ⚔ soldats</div>
         <div class="hm bottom">Construction (coût, raccourci)</div>
-        <div class="hm map">Carte : sous chaque nom, ⚔ soldats qui défendent → partis en attaque</div>
+        <div class="hm map">Carte : sous chaque nom, 🛡 garnison · ⚔ soldats à la maison. Survole un territoire : ce que donnerait ton attaque.</div>
       </div>
       <p class="small">Survole n’importe quel nombre pour savoir ce que c’est. Les éléments apparaissent au fur et à mesure qu’ils deviennent utiles.</p>`,
   },
